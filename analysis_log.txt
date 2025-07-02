@@ -1,0 +1,165 @@
+Starting analysis of all control flow graphs...
+Standardizing Radare2 control flow graph...
+Radare2: 96 basic blocks, 157 control flow edges
+Standardizing Ghidra control flow graph...
+Ghidra: 130 basic blocks, 205 control flow edges
+Standardizing Angr_Fast control flow graph...
+Angr_Fast: 146 basic blocks, 209 control flow edges
+Standardizing Angr_Emul control flow graph...
+Angr_Emul: 93 basic blocks, 121 control flow edges
+Standardizing GCC control flow graph...
+⚠️  Warning: GCC analysis failed or found no basic blocks and control flow edges - Will continue with other tools
+    This may be due to:
+    - GCC CFG generation failure
+    - Missing compilation flags or debug information
+    - Incorrect file format
+    - Binary file too complex
+GCC: 0 basic blocks, 0 control flow edges
+✅ Successfully analyzed 4 tools: Radare2, Ghidra, Angr_Fast, Angr_Emul
+
+🔍 Aggregating data from all tools:
+  + Radare2: Added 96 unique basic blocks, 157 unique edges
+  + Ghidra: Added 130 unique basic blocks, 205 unique edges
+  + Angr_Fast: Added 146 unique basic blocks, 209 unique edges
+  + Angr_Emul: Added 0 unique basic blocks, 5 unique edges
+📊 Total unique basic blocks: 372
+📊 Total unique edges: 576
+
+🔍 Finding common elements across tools:
+  - Radare2: Filtered out 276 basic blocks, 419 edges not in common
+  - Ghidra: Filtered out 96 basic blocks, 157 edges not in common
+📊 Common basic blocks: 0
+📊 Common edges: 0
+
+✅ Final validation:
+  - All basic blocks are unique: True
+  - All edges are unique: True
+  - Common basic blocks are unique: True
+  - Common edges are unique: True
+================================================================================
+Multi-Tool Control Flow Graph Comparison Analysis Report
+================================================================================
+
+1. Basic Statistics
+--------------------------------------------------
+Tool            Basic Blocks    Edges           Graph Density   Status    
+---------------------------------------------------------------------------
+Radare2         96              157             0.0172          ✓ Success 
+Ghidra          130             205             0.0096          ✓ Success 
+Angr_Fast       146             209             0.0099          ✓ Success 
+Angr_Emul       93              121             0.0141          ✓ Success 
+GCC             0               0               0.0000          ✗ Failed  
+
+⚠️  Failed analysis tools: GCC
+   These tools may have failed due to:
+   - Tool execution failure or timeout
+   - Unsupported binary file format
+   - Configuration or environment issues
+
+2. Basic Block Discovery Analysis
+--------------------------------------------------
+Total unique basic blocks: 372
+Basic blocks found by all tools: 0
+
+3. Pairwise Comparison Analysis (Successful Tools Only)
+--------------------------------------------------
+Radare2 vs Ghidra:
+  Common basic blocks: 0
+  Jaccard similarity: 0.000
+Radare2 vs Angr_Fast:
+  Common basic blocks: 0
+  Jaccard similarity: 0.000
+Radare2 vs Angr_Emul:
+  Common basic blocks: 0
+  Jaccard similarity: 0.000
+Ghidra vs Angr_Fast:
+  Common basic blocks: 0
+  Jaccard similarity: 0.000
+Ghidra vs Angr_Emul:
+  Common basic blocks: 0
+  Jaccard similarity: 0.000
+Angr_Fast vs Angr_Emul:
+  Common basic blocks: 93
+  Jaccard similarity: 0.637
+
+4. Control Flow Analysis
+--------------------------------------------------
+Total unique control flow edges: 576
+Control flow edges found by all tools: 0
+
+5. Tool Characteristic Analysis (Successful Tools Only)
+--------------------------------------------------
+
+Radare2 unique basic blocks (96 total):
+  - 0x0002f040
+  - 0x0002f130
+  - 0x0002f150
+  - 0x0002f158
+  - 0x0002f168
+  - 0x0002f178
+  - 0x0002f188
+  - 0x0002f198
+  - 0x0002f1b0
+  - 0x0002f1bb
+  ... and 86 more
+
+Ghidra unique basic blocks (130 total):
+  - 0012f09f
+  - 0012f0ae
+  - 0012f0bd
+  - 0012f0d1
+  - 0012f0dd
+  - 0012f0ec
+  - 0012f130
+  - 0012f147
+  - 0012f150
+  - 0012f158
+  ... and 120 more
+
+Angr_Fast unique basic blocks (53 total):
+  - 0x42f178
+  - 0x42f180
+  - 0x42f188
+  - 0x42f198
+  - 0x42f1b0
+  - 0x42f1bb
+  - 0x42f1c3
+  - 0x42f1cb
+  - 0x42f1e0
+  - 0x42f1f8
+  ... and 43 more
+
+Angr_Emul unique basic blocks (0 total):
+  (No unique basic blocks)
+
+Generating visualization charts...
+Basic block discovery comparison chart saved as result/basic_block_discovery_comparison.png
+Control flow comparison chart saved as result/control_flow_comparison.png
+Graph density comparison chart saved as result/graph_density_comparison.png
+Similarity heatmap saved as result/similarity_heatmap.png
+Comparison results exported to:
+  - result/multi_cfg_comparison_statistics.csv
+  - result/multi_cfg_comparison_similarity.csv
+  - result/multi_cfg_comparison_basic_blocks.csv
+⚠️  Note: GCC tool analysis failed, marked as 'N/A' in CSV files
+
+Exporting comparison results to CSV files...
+Comparison results exported to:
+  - result/multi_cfg_comparison_statistics.csv
+  - result/multi_cfg_comparison_similarity.csv
+  - result/multi_cfg_comparison_basic_blocks.csv
+⚠️  Note: GCC tool analysis failed, marked as 'N/A' in CSV files
+
+Performing GCC coverage analysis...
+⚠️  Warning: GCC data is empty, skipping coverage analysis
+
+✅ Analysis complete!
+📁 Output files:
+  - analysis_log.txt (complete log)
+  - result/basic_block_discovery_comparison.png (basic block discovery comparison)
+  - result/control_flow_comparison.png (control flow comparison)
+  - result/graph_density_comparison.png (graph density comparison)
+  - result/similarity_heatmap.png (similarity heatmap)
+  - result/gcc_coverage_analysis_comparison.png (GCC coverage analysis)
+  - result/multi_cfg_comparison_*.csv (basic comparison data)
+  - result/gcc_coverage_analysis_*.csv (GCC coverage analysis data)

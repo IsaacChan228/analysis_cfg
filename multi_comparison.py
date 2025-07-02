@@ -23,14 +23,14 @@ class Logger:
     def close(self):
         self.log.close()
 
-class CallGraphNormalizer:
-    """Call graph standardization processor"""
+class CFGNormalizer:
+    """Control Flow Graph standardization processor"""
     
     # Tools that are allowed to fail without terminating the program
     OPTIONAL_TOOLS = {'angr_emul', 'gcc'}
     
-    def normalize_function_name(self, name: str) -> str:
-        """Standardize function names"""
+    def normalize_block_name(self, name: str) -> str:
+        """Standardize basic block names"""
         if not name:
             return None
         
@@ -39,10 +39,16 @@ class CallGraphNormalizer:
         if not name:
             return None
         
-        # Remove various prefixes
+        # Remove various prefixes for addresses and labels
         name = re.sub(r'^(dbg\.|sym\.|fcn\.|reloc\.|imp\.|unk\.)', '', name)
         
-        # Remove address suffixes and labels
+        # For CFG, we typically work with addresses as basic block identifiers
+        # Keep address format but normalize it
+        if re.match(r'^0x[0-9a-f]+$', name, re.IGNORECASE):
+            # Normalize address format - ensure lowercase and consistent format
+            return name.lower()
+        
+        # Remove address suffixes and labels for non-address blocks
         name = re.sub(r'\.0x[0-9a-f]+$', '', name)
         name = re.sub(r'@0x[0-9a-f]+$', '', name)
         name = re.sub(r'_0x[0-9a-f]+$', '', name)
@@ -63,27 +69,19 @@ class CallGraphNormalizer:
         
         # Handle special cases
         if name.startswith('case.') or name.startswith('switch.'):
-            return None
+            return name  # Keep switch cases as they are important in CFG
         
         # If name becomes empty or contains only digits, return None
-        if not name or name.isdigit():
+        if not name or (name.isdigit() and len(name) < 4):  # Allow longer digit sequences
             return None
         
-        # Convert to lowercase for case-insensitive comparison to reduce duplicates
-        # but preserve original case for readability
-        normalized_lower = name.lower()
-        
-        # Filter out common generic names that might cause duplicates
-        generic_names = {'unknown', 'unnamed', 'noname', 'func', 'function', 'sub'}
-        if normalized_lower in generic_names:
-            return None
-            
+        # For CFG analysis, preserve more identifiers including labels
         return name
     
     def extract_from_dot(self, dot_file: str, tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
-        """Extract standardized functions and call relationships from DOT files"""
-        functions = set()
-        calls = set()
+        """Extract standardized basic blocks and control flow edges from DOT files"""
+        basic_blocks = set()
+        edges = set()
         
         try:
             with open(dot_file, 'r', encoding='utf-8') as f:
@@ -91,49 +89,49 @@ class CallGraphNormalizer:
         except FileNotFoundError:
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: {tool_name} file not found ({dot_file}) - This is expected as {tool_name} may fail")
-                return functions, calls
+                return basic_blocks, edges
             else:
                 print(f"❌ Fatal Error: Required {tool_name} file not found ({dot_file})")
-                print(f"Program will terminate. Please ensure all required graph files exist.")
-                raise FileNotFoundError(f"Required graph file missing: {dot_file}")
+                print(f"Program will terminate. Please ensure all required CFG files exist.")
+                raise FileNotFoundError(f"Required CFG file missing: {dot_file}")
         except Exception as e:
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: Cannot read {tool_name} file ({dot_file}): {e} - Will skip this tool")
-                return functions, calls
+                return basic_blocks, edges
             else:
                 print(f"❌ Fatal Error: Cannot read required {tool_name} file ({dot_file}): {e}")
                 print(f"Program will terminate.")
-                raise Exception(f"Failed to read required graph file: {dot_file}")
+                raise Exception(f"Failed to read required CFG file: {dot_file}")
         
         # Check if file content is empty or invalid
         if not content.strip():
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: {tool_name} file is empty or has no content - This is acceptable")
-                return functions, calls
+                return basic_blocks, edges
             else:
                 print(f"❌ Fatal Error: Required {tool_name} file is empty or has no content")
-                print(f"Program will terminate. Please check the graph file generation process.")
-                raise ValueError(f"Required graph file is empty: {dot_file}")
+                print(f"Program will terminate. Please check the CFG file generation process.")
+                raise ValueError(f"Required CFG file is empty: {dot_file}")
         
         if tool_name.lower() == 'ghidra':
-            functions, calls = self._extract_from_ghidra_gf(content)
+            basic_blocks, edges = self._extract_from_ghidra_gf(content)
         else:
-            functions, calls = self._extract_from_standard_dot(content)
+            basic_blocks, edges = self._extract_from_standard_dot(content)
         
         # Check if data was successfully extracted
-        if len(functions) == 0 and len(calls) == 0:
+        if len(basic_blocks) == 0 and len(edges) == 0:
             if tool_name.lower() in self.OPTIONAL_TOOLS:
-                print(f"⚠️  Warning: {tool_name} analysis failed or found no functions and call relationships - Will continue with other tools")
+                print(f"⚠️  Warning: {tool_name} analysis failed or found no basic blocks and control flow edges - Will continue with other tools")
                 print(f"    This may be due to:")
                 if tool_name.lower() == 'angr_emul':
                     print(f"    - Angr emulation mode execution failure")
                 elif tool_name.lower() == 'gcc':
-                    print(f"    - GCC call graph generation failure")
+                    print(f"    - GCC CFG generation failure")
                     print(f"    - Missing compilation flags or debug information")
                 print(f"    - Incorrect file format")
                 print(f"    - Binary file too complex")
             else:
-                print(f"❌ Fatal Error: Required {tool_name} found no functions and call relationships")
+                print(f"❌ Fatal Error: Required {tool_name} found no basic blocks and control flow edges")
                 print(f"    This may be due to:")
                 print(f"    - Analysis tool execution failure")
                 print(f"    - Incorrect file format")
@@ -142,97 +140,87 @@ class CallGraphNormalizer:
                 raise ValueError(f"Required tool {tool_name} found no data")
         
         # Explicitly deduplicate and clean the data
-        functions, calls = self._deduplicate_data(functions, calls, tool_name)
+        basic_blocks, edges = self._deduplicate_data(basic_blocks, edges, tool_name)
         
-        return functions, calls
+        return basic_blocks, edges
     
     def _extract_from_standard_dot(self, content: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
         """Extract from standard DOT format"""
-        functions = set()
-        calls = set()
+        basic_blocks = set()
+        edges = set()
         
-        # Extract node definitions
+        # Extract node definitions - for CFG, nodes represent basic blocks
         node_pattern = r'"([^"]+)"\s*\[.*?label="([^"]*)'
         for match in re.finditer(node_pattern, content):
             node_id = match.group(1)
-            func_name = match.group(2) if match.group(2) else node_id
+            block_label = match.group(2) if match.group(2) else node_id
             
-            # Handle labels containing newlines
-            func_name = func_name.split('\\n')[0] if '\\n' in func_name else func_name
+            # Handle labels containing newlines - use the first line or address
+            block_label = block_label.split('\\n')[0] if '\\n' in block_label else block_label
             
-            normalized = self.normalize_function_name(func_name)
+            # For CFG, we prefer to use the address as the block identifier
+            normalized = self.normalize_block_name(node_id)  # Use node_id which is usually the address
             if normalized:
-                functions.add(normalized)
+                basic_blocks.add(normalized)
         
         # If no labeled nodes found, try to extract node names directly
-        if not functions:
+        if not basic_blocks:
             simple_node_pattern = r'"([^"]+)"\s*\['
             for match in re.finditer(simple_node_pattern, content):
-                func_name = match.group(1)
-                normalized = self.normalize_function_name(func_name)
+                block_name = match.group(1)
+                normalized = self.normalize_block_name(block_name)
                 if normalized:
-                    functions.add(normalized)
+                    basic_blocks.add(normalized)
         
-        # Extract edges (call relationships)
+        # Extract edges (control flow relationships)
         edge_pattern = r'"([^"]+)"\s*->\s*"([^"]+)"'
         for match in re.finditer(edge_pattern, content):
-            caller = match.group(1)
-            callee = match.group(2)
+            source = match.group(1)
+            target = match.group(2)
             
-            # Find corresponding function names
-            caller_func = self._find_function_name_in_content(content, caller)
-            callee_func = self._find_function_name_in_content(content, callee)
+            # Normalize block identifiers
+            source_normalized = self.normalize_block_name(source)
+            target_normalized = self.normalize_block_name(target)
             
-            caller_normalized = self.normalize_function_name(caller_func)
-            callee_normalized = self.normalize_function_name(callee_func)
-            
-            if caller_normalized and callee_normalized:
-                calls.add((caller_normalized, callee_normalized))
+            if source_normalized and target_normalized:
+                edges.add((source_normalized, target_normalized))
         
-        return functions, calls
+        return basic_blocks, edges
     
     def _extract_from_ghidra_gf(self, content: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
         """Extract from Ghidra GF format"""
-        functions = set()
-        calls = set()
+        basic_blocks = set()
+        edges = set()
         
-        # Extract node definitions - Ghidra format: "address" [ label="function_name" VertexType="Entry" ];
+        # Extract node definitions - Ghidra format: "address" [ label="block_label" VertexType="Entry" ];
         node_pattern = r'"([^"]+)"\s*\[\s*label="([^"]+)"'
         for match in re.finditer(node_pattern, content):
             address = match.group(1)
-            func_name = match.group(2)
+            block_label = match.group(2)
             
-            normalized = self.normalize_function_name(func_name)
+            # For CFG, use address as the primary identifier
+            normalized = self.normalize_block_name(address)
             if normalized:
-                functions.add(normalized)
+                basic_blocks.add(normalized)
         
-        # Extract edges (call relationships) - Format: "address1" -> "address2";
+        # Extract edges (control flow relationships) - Format: "address1" -> "address2";
         edge_pattern = r'"([^"]+)"\s*->\s*"([^"]+)"'
-        address_to_func = {}
         
-        # First build address to function name mapping
-        for match in re.finditer(node_pattern, content):
-            address = match.group(1)
-            func_name = match.group(2)
-            normalized = self.normalize_function_name(func_name)
-            if normalized:
-                address_to_func[address] = normalized
-        
-        # Extract call relationships
+        # Extract control flow relationships
         for match in re.finditer(edge_pattern, content):
-            caller_addr = match.group(1)
-            callee_addr = match.group(2)
+            source_addr = match.group(1)
+            target_addr = match.group(2)
             
-            caller_func = address_to_func.get(caller_addr)
-            callee_func = address_to_func.get(callee_addr)
+            source_normalized = self.normalize_block_name(source_addr)
+            target_normalized = self.normalize_block_name(target_addr)
             
-            if caller_func and callee_func:
-                calls.add((caller_func, callee_func))
+            if source_normalized and target_normalized:
+                edges.add((source_normalized, target_normalized))
         
-        return functions, calls
+        return basic_blocks, edges
     
-    def _find_function_name_in_content(self, content: str, identifier: str) -> str:
-        """Find function name corresponding to identifier in content"""
+    def _find_block_name_in_content(self, content: str, identifier: str) -> str:
+        """Find block name corresponding to identifier in content"""
         # Look for corresponding label
         pattern = rf'"{re.escape(identifier)}"\s*\[.*?label="([^"]*)"'
         match = re.search(pattern, content)
@@ -241,44 +229,44 @@ class CallGraphNormalizer:
             return label.split('\\n')[0] if '\\n' in label else label
         return identifier
     
-    def _deduplicate_data(self, functions: Set[str], calls: Set[Tuple[str, str]], tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
-        """Explicitly deduplicate functions and calls with logging"""
-        original_func_count = len(functions)
-        original_call_count = len(calls)
+    def _deduplicate_data(self, basic_blocks: Set[str], edges: Set[Tuple[str, str]], tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
+        """Explicitly deduplicate basic blocks and edges with logging"""
+        original_block_count = len(basic_blocks)
+        original_edge_count = len(edges)
         
         # Convert to set to ensure deduplication (even though they should already be sets)
-        deduplicated_functions = set(functions)
-        deduplicated_calls = set(calls)
+        deduplicated_blocks = set(basic_blocks)
+        deduplicated_edges = set(edges)
         
-        # Remove any self-calls (function calling itself) as they might be artifacts
-        filtered_calls = set()
-        self_call_count = 0
-        for caller, callee in deduplicated_calls:
-            if caller == callee:
-                self_call_count += 1
+        # Remove any self-loops (block pointing to itself) as they might be artifacts
+        filtered_edges = set()
+        self_loop_count = 0
+        for source, target in deduplicated_edges:
+            if source == target:
+                self_loop_count += 1
             else:
-                filtered_calls.add((caller, callee))
+                filtered_edges.add((source, target))
         
-        final_func_count = len(deduplicated_functions)
-        final_call_count = len(filtered_calls)
+        final_block_count = len(deduplicated_blocks)
+        final_edge_count = len(filtered_edges)
         
         # Log deduplication results if any duplicates were found
-        if original_func_count != final_func_count:
-            print(f"  🔧 {tool_name}: Removed {original_func_count - final_func_count} duplicate functions")
+        if original_block_count != final_block_count:
+            print(f"  🔧 {tool_name}: Removed {original_block_count - final_block_count} duplicate basic blocks")
         
-        if original_call_count != final_call_count + self_call_count:
-            print(f"  🔧 {tool_name}: Removed {original_call_count - final_call_count - self_call_count} duplicate calls")
+        if original_edge_count != final_edge_count + self_loop_count:
+            print(f"  🔧 {tool_name}: Removed {original_edge_count - final_edge_count - self_loop_count} duplicate edges")
         
-        if self_call_count > 0:
-            print(f"  🔧 {tool_name}: Removed {self_call_count} self-calls")
+        if self_loop_count > 0:
+            print(f"  🔧 {tool_name}: Removed {self_loop_count} self-loops")
         
-        return deduplicated_functions, filtered_calls
+        return deduplicated_blocks, filtered_edges
 
-class MultiCallGraphComparator:
-    """Multi call graph comparison analyzer"""
+class MultiCFGComparator:
+    """Multi control flow graph comparison analyzer"""
     
     def __init__(self):
-        self.normalizer = CallGraphNormalizer()
+        self.normalizer = CFGNormalizer()
         self.tools = {
             'Radare2': 'graph/r2.dot',
             'Ghidra': 'graph/ghidra.gf',
@@ -287,33 +275,33 @@ class MultiCallGraphComparator:
             'GCC': 'graph/gcc.dot'
         }
         
-    def compare_all_call_graphs(self) -> Dict:
-        """Compare all call graph files"""
-        print("Starting analysis of all call graphs...")
+    def compare_all_cfgs(self) -> Dict:
+        """Compare all CFG files"""
+        print("Starting analysis of all control flow graphs...")
         
         tool_data = {}
         
         # Extract data from each tool
         for tool_name, file_path in self.tools.items():
-            print(f"Standardizing {tool_name} call graph...")
+            print(f"Standardizing {tool_name} control flow graph...")
             try:
-                functions, calls = self.normalizer.extract_from_dot(file_path, tool_name)
+                basic_blocks, edges = self.normalizer.extract_from_dot(file_path, tool_name)
                 tool_data[tool_name] = {
-                    'functions': functions,
-                    'calls': calls,
-                    'graph': self._create_graph(functions, calls)
+                    'basic_blocks': basic_blocks,
+                    'edges': edges,
+                    'graph': self._create_graph(basic_blocks, edges)
                 }
-                print(f"{tool_name}: {len(functions)} functions, {len(calls)} call relationships")
+                print(f"{tool_name}: {len(basic_blocks)} basic blocks, {len(edges)} control flow edges")
             except (FileNotFoundError, ValueError, Exception) as e:
                 if tool_name.lower() in self.normalizer.OPTIONAL_TOOLS:
                     # Optional tool failure is acceptable, create empty data
                     print(f"⚠️  {tool_name} skipped: {str(e)}")
                     tool_data[tool_name] = {
-                        'functions': set(),
-                        'calls': set(),
+                        'basic_blocks': set(),
+                        'edges': set(),
                         'graph': self._create_graph(set(), set())
                     }
-                    print(f"{tool_name}: 0 functions, 0 call relationships (skipped)")
+                    print(f"{tool_name}: 0 basic blocks, 0 control flow edges (skipped)")
                 else:
                     # Required tool failures terminate the program
                     print(f"💥 Program terminated: {tool_name} is a required tool but analysis failed")
@@ -322,7 +310,7 @@ class MultiCallGraphComparator:
         # Verify at least one successful tool (except angr_emul)
         successful_tools = []
         for tool_name, data in tool_data.items():
-            if len(data['functions']) > 0 or len(data['calls']) > 0:
+            if len(data['basic_blocks']) > 0 or len(data['edges']) > 0:
                 successful_tools.append(tool_name)
         
         if len(successful_tools) < 2:
@@ -334,145 +322,70 @@ class MultiCallGraphComparator:
         print(f"✅ Successfully analyzed {len(successful_tools)} tools: {', '.join(successful_tools)}")
         
         # Calculate union and intersection of all tools with explicit deduplication
-        all_functions = set()
-        all_calls = set()
+        all_basic_blocks = set()
+        all_edges = set()
         
         print(f"\n🔍 Aggregating data from all tools:")
         for tool_name, data in tool_data.items():
-            before_func_count = len(all_functions)
-            before_call_count = len(all_calls)
+            before_block_count = len(all_basic_blocks)
+            before_edge_count = len(all_edges)
             
-            all_functions |= data['functions']
-            all_calls |= data['calls']
+            all_basic_blocks |= data['basic_blocks']
+            all_edges |= data['edges']
             
-            func_added = len(all_functions) - before_func_count
-            call_added = len(all_calls) - before_call_count
+            blocks_added = len(all_basic_blocks) - before_block_count
+            edges_added = len(all_edges) - before_edge_count
             
-            if func_added > 0 or call_added > 0:
-                print(f"  + {tool_name}: Added {func_added} unique functions, {call_added} unique calls")
+            if blocks_added > 0 or edges_added > 0:
+                print(f"  + {tool_name}: Added {blocks_added} unique basic blocks, {edges_added} unique edges")
         
-        print(f"📊 Total unique functions: {len(all_functions)}")
-        print(f"📊 Total unique calls: {len(all_calls)}")
+        print(f"📊 Total unique basic blocks: {len(all_basic_blocks)}")
+        print(f"📊 Total unique edges: {len(all_edges)}")
         
         # Calculate intersection with explicit logging
-        common_functions = all_functions.copy()
-        common_calls = all_calls.copy()
+        common_basic_blocks = all_basic_blocks.copy()
+        common_edges = all_edges.copy()
         
         print(f"\n🔍 Finding common elements across tools:")
         for tool_name, data in tool_data.items():
-            before_common_func = len(common_functions)
-            before_common_call = len(common_calls)
+            before_common_blocks = len(common_basic_blocks)
+            before_common_edges = len(common_edges)
             
-            common_functions &= data['functions']
-            common_calls &= data['calls']
+            common_basic_blocks &= data['basic_blocks']
+            common_edges &= data['edges']
             
-            func_removed = before_common_func - len(common_functions)
-            call_removed = before_common_call - len(common_calls)
+            blocks_removed = before_common_blocks - len(common_basic_blocks)
+            edges_removed = before_common_edges - len(common_edges)
             
-            if func_removed > 0 or call_removed > 0:
-                print(f"  - {tool_name}: Filtered out {func_removed} functions, {call_removed} calls not in common")
+            if blocks_removed > 0 or edges_removed > 0:
+                print(f"  - {tool_name}: Filtered out {blocks_removed} basic blocks, {edges_removed} edges not in common")
         
-        print(f"📊 Common functions: {len(common_functions)}")
-        print(f"📊 Common calls: {len(common_calls)}")
+        print(f"📊 Common basic blocks: {len(common_basic_blocks)}")
+        print(f"📊 Common edges: {len(common_edges)}")
         
         # Final validation - ensure no duplicates in the final results
         print(f"\n✅ Final validation:")
-        print(f"  - All functions are unique: {len(all_functions) == len(set(all_functions))}")
-        print(f"  - All calls are unique: {len(all_calls) == len(set(all_calls))}")
-        print(f"  - Common functions are unique: {len(common_functions) == len(set(common_functions))}")
-        print(f"  - Common calls are unique: {len(common_calls) == len(set(common_calls))}")
+        print(f"  - All basic blocks are unique: {len(all_basic_blocks) == len(set(all_basic_blocks))}")
+        print(f"  - All edges are unique: {len(all_edges) == len(set(all_edges))}")
+        print(f"  - Common basic blocks are unique: {len(common_basic_blocks) == len(set(common_basic_blocks))}")
+        print(f"  - Common edges are unique: {len(common_edges) == len(set(common_edges))}")
         
         return {
             'tool_data': tool_data,
-            'all_functions': all_functions,
-            'all_calls': all_calls,
-            'common_functions': common_functions,
-            'common_calls': common_calls
+            'all_basic_blocks': all_basic_blocks,
+            'all_edges': all_edges,
+            'common_basic_blocks': common_basic_blocks,
+            'common_edges': common_edges
         }
     
-    def _create_graph(self, functions: Set[str], calls: Set[Tuple[str, str]]) -> nx.DiGraph:
+    def _create_graph(self, basic_blocks: Set[str], edges: Set[Tuple[str, str]]) -> nx.DiGraph:
         """Create NetworkX directed graph"""
         G = nx.DiGraph()
-        G.add_nodes_from(functions)
-        G.add_edges_from(calls)
+        G.add_nodes_from(basic_blocks)
+        G.add_edges_from(edges)
         return G
     
-    def _classify_functions(self, functions: Set[str]) -> Dict[str, Set[str]]:
-        """Classify functions into high-level and low-level categories"""
-        high_level = set()
-        low_level = set()
-        
-        # High-level function characteristic patterns
-        high_level_patterns = [
-            r'^main$', r'^_start$', r'^entry$',
-            r'.*main.*', r'.*init.*', r'.*setup.*', r'.*config.*',
-            r'.*process.*', r'.*handle.*', r'.*manage.*', r'.*execute.*',
-            r'.*parse.*', r'.*format.*', r'.*print.*', r'.*output.*',
-            r'.*input.*', r'.*read.*', r'.*write.*', r'.*file.*',
-            r'.*error.*', r'.*debug.*', r'.*usage.*', r'.*help.*'
-        ]
-        
-        # Low-level function characteristic patterns
-        low_level_patterns = [
-            r'^0x[0-9a-f]+$',  # Pure address
-            r'^[0-9a-f]{8,}$',  # Long hexadecimal number
-            r'^sub_[0-9a-f]+$', r'^loc_[0-9a-f]+$',  # Disassembler-generated labels
-            r'^j_.*',  # Jump functions
-            r'.*@plt$', r'.*\.plt$',  # PLT entries
-            r'.*@got$', r'.*\.got$',  # GOT entries
-            r'^__.*__$',  # System internal functions
-            r'.*_0x[0-9a-f]+$',  # Address suffixes
-            r'^[0-9]+$'  # Pure numbers
-        ]
-        
-        import re
-        
-        for func in functions:
-            if not func:
-                continue
-                
-            # Check if it's a low-level function
-            is_low_level = False
-            for pattern in low_level_patterns:
-                if re.match(pattern, func, re.IGNORECASE):
-                    low_level.add(func)
-                    is_low_level = True
-                    break
-            
-            # If not low-level, check if it's high-level
-            if not is_low_level:
-                is_high_level = False
-                for pattern in high_level_patterns:
-                    if re.match(pattern, func, re.IGNORECASE):
-                        high_level.add(func)
-                        is_high_level = True
-                        break
-                
-                # Default classification: shorter length with letters as high-level, others as low-level
-                if not is_high_level:
-                    if len(func) <= 20 and any(c.isalpha() for c in func):
-                        high_level.add(func)
-                    else:
-                        low_level.add(func)
-        
-        return {
-            'high_level': high_level,
-            'low_level': low_level
-        }
-    
-    def _filter_calls_by_function_level(self, calls: Set[Tuple[str, str]], 
-                                      high_level_funcs: Set[str], 
-                                      low_level_funcs: Set[str], 
-                                      level: str) -> Set[Tuple[str, str]]:
-        """Filter call relationships by function level"""
-        target_funcs = high_level_funcs if level == 'high' else low_level_funcs
-        filtered_calls = set()
-        
-        for caller, callee in calls:
-            if caller in target_funcs and callee in target_funcs:
-                filtered_calls.add((caller, callee))
-        
-        return filtered_calls
+
     
     def _calculate_graph_metrics(self, graph: nx.DiGraph) -> Dict:
         """Calculate graph structure metrics"""
@@ -508,27 +421,27 @@ class MultiCallGraphComparator:
         
         report = []
         report.append("=" * 80)
-        report.append("Multi-Tool Call Graph Comparison Analysis Report")
+        report.append("Multi-Tool Control Flow Graph Comparison Analysis Report")
         report.append("=" * 80)
         
         # Basic statistics
         report.append("\n1. Basic Statistics")
         report.append("-" * 50)
-        report.append(f"{'Tool':<15} {'Functions':<15} {'Calls':<15} {'Graph Density':<15} {'Status':<10}")
+        report.append(f"{'Tool':<15} {'Basic Blocks':<15} {'Edges':<15} {'Graph Density':<15} {'Status':<10}")
         report.append("-" * 75)
         
         failed_tools = []
         for tool_name, data in tool_data.items():
             metrics = self._calculate_graph_metrics(data['graph'])
-            func_count = len(data['functions'])
-            call_count = len(data['calls'])
+            block_count = len(data['basic_blocks'])
+            edge_count = len(data['edges'])
             
             # Determine if tool succeeded
-            status = "✓ Success" if func_count > 0 or call_count > 0 else "✗ Failed"
-            if func_count == 0 and call_count == 0:
+            status = "✓ Success" if block_count > 0 or edge_count > 0 else "✗ Failed"
+            if block_count == 0 and edge_count == 0:
                 failed_tools.append(tool_name)
             
-            report.append(f"{tool_name:<15} {func_count:<15} {call_count:<15} {metrics['density']:<15.4f} {status:<10}")
+            report.append(f"{tool_name:<15} {block_count:<15} {edge_count:<15} {metrics['density']:<15.4f} {status:<10}")
         
         # Add explanation for failed tools
         if failed_tools:
@@ -538,11 +451,11 @@ class MultiCallGraphComparator:
             report.append("   - Unsupported binary file format")
             report.append("   - Configuration or environment issues")
         
-        # Function discovery comparison
-        report.append(f"\n2. Function Discovery Analysis")
+        # Basic block discovery comparison
+        report.append(f"\n2. Basic Block Discovery Analysis")
         report.append("-" * 50)
-        report.append(f"Total unique functions: {len(comparison['all_functions'])}")
-        report.append(f"Functions found by all tools: {len(comparison['common_functions'])}")
+        report.append(f"Total unique basic blocks: {len(comparison['all_basic_blocks'])}")
+        report.append(f"Basic blocks found by all tools: {len(comparison['common_basic_blocks'])}")
         
         # Pairwise comparison (only successful tools)
         successful_tools = [tool for tool in tool_data.keys() if tool not in failed_tools]
@@ -552,25 +465,25 @@ class MultiCallGraphComparator:
             
             for i, tool1 in enumerate(successful_tools):
                 for j, tool2 in enumerate(successful_tools[i+1:], i+1):
-                    func1 = tool_data[tool1]['functions']
-                    func2 = tool_data[tool2]['functions']
-                    common = len(func1 & func2)
-                    union = len(func1 | func2)
+                    blocks1 = tool_data[tool1]['basic_blocks']
+                    blocks2 = tool_data[tool2]['basic_blocks']
+                    common = len(blocks1 & blocks2)
+                    union = len(blocks1 | blocks2)
                     jaccard = common / union if union > 0 else 0
                     
                     report.append(f"{tool1} vs {tool2}:")
-                    report.append(f"  Common functions: {common}")
+                    report.append(f"  Common basic blocks: {common}")
                     report.append(f"  Jaccard similarity: {jaccard:.3f}")
         else:
             report.append(f"\n3. Pairwise Comparison Analysis")
             report.append("-" * 50)
             report.append("⚠️  Less than 2 successful tools, cannot perform meaningful comparison")
         
-        # Call relationship analysis
-        report.append(f"\n4. Call Relationship Analysis")
+        # Control flow analysis
+        report.append(f"\n4. Control Flow Analysis")
         report.append("-" * 50)
-        report.append(f"Total unique call relationships: {len(comparison['all_calls'])}")
-        report.append(f"Call relationships found by all tools: {len(comparison['common_calls'])}")
+        report.append(f"Total unique control flow edges: {len(comparison['all_edges'])}")
+        report.append(f"Control flow edges found by all tools: {len(comparison['common_edges'])}")
         
         # Detailed tool characteristic analysis (successful tools only)
         if successful_tools:
@@ -579,23 +492,23 @@ class MultiCallGraphComparator:
             
             for tool_name in successful_tools:
                 data = tool_data[tool_name]
-                # Calculate functions unique to this tool (not found by any other successful tool)
-                unique_funcs = data['functions'].copy()
+                # Calculate basic blocks unique to this tool (not found by any other successful tool)
+                unique_blocks = data['basic_blocks'].copy()
                 for other_tool in successful_tools:
                     if other_tool != tool_name:
-                        unique_funcs -= tool_data[other_tool]['functions']
+                        unique_blocks -= tool_data[other_tool]['basic_blocks']
                 
-                report.append(f"\n{tool_name} unique functions ({len(unique_funcs)} total):")
-                if len(unique_funcs) > 0:
-                    for func in sorted(list(unique_funcs))[:10]:
-                        report.append(f"  - {func}")
-                    if len(unique_funcs) > 10:
-                        report.append(f"  ... and {len(unique_funcs) - 10} more")
+                report.append(f"\n{tool_name} unique basic blocks ({len(unique_blocks)} total):")
+                if len(unique_blocks) > 0:
+                    for block in sorted(list(unique_blocks))[:10]:
+                        report.append(f"  - {block}")
+                    if len(unique_blocks) > 10:
+                        report.append(f"  ... and {len(unique_blocks) - 10} more")
                 else:
-                    report.append("  (No unique functions)")
+                    report.append("  (No unique basic blocks)")
         
         return "\n".join(report)
-    
+
     def visualize_comparison(self, comparison: Dict):
         """Visualize comparison results"""
         tool_data = comparison['tool_data']
@@ -603,36 +516,9 @@ class MultiCallGraphComparator:
         # Identify failed tools
         failed_tools = []
         for tool_name, data in tool_data.items():
-            if len(data['functions']) == 0 and len(data['calls']) == 0:
+            if len(data['basic_blocks']) == 0 and len(data['edges']) == 0:
                 failed_tools.append(tool_name)
-        
-        # Prepare high-level and low-level function data
-        tool_level_data = {}
-        for tool_name, data in tool_data.items():
-            classification = self._classify_functions(data['functions'])
-            high_level_calls = self._filter_calls_by_function_level(
-                data['calls'], classification['high_level'], classification['low_level'], 'high')
-            low_level_calls = self._filter_calls_by_function_level(
-                data['calls'], classification['high_level'], classification['low_level'], 'low')
-            
-            # Calculate mixed-level calls
-            mixed_level_calls = set()
-            for caller, callee in data['calls']:
-                caller_is_high = caller in classification['high_level']
-                callee_is_high = callee in classification['high_level']
-                if (caller_is_high and not callee_is_high) or (not caller_is_high and callee_is_high):
-                    mixed_level_calls.add((caller, callee))
-            
-            tool_level_data[tool_name] = {
-                'high_level_funcs': classification['high_level'],
-                'low_level_funcs': classification['low_level'],
-                'high_level_calls': high_level_calls,
-                'low_level_calls': low_level_calls,
-                'mixed_level_calls': mixed_level_calls,
-                'high_level_graph': self._create_graph(classification['high_level'], high_level_calls),
-                'low_level_graph': self._create_graph(classification['low_level'], low_level_calls)
-            }
-        
+
         tools = list(tool_data.keys())
         colors = ['#ff7f0e', '#9467bd', '#2ca02c', '#d62728', '#17becf']
         
@@ -644,169 +530,54 @@ class MultiCallGraphComparator:
             else:
                 bar_colors.append(colors[i % len(colors)])
         
-        # Create three separate charts
-        self._create_function_discovery_chart(tool_data, tool_level_data, tools, bar_colors, failed_tools)
-        self._create_call_relationship_chart(tool_data, tool_level_data, tools, bar_colors, failed_tools)
-        self._create_graph_density_chart(tool_data, tool_level_data, tools, bar_colors, failed_tools)
+        # Create charts
+        self._create_basic_block_discovery_chart(tool_data, tools, bar_colors, failed_tools)
+        self._create_control_flow_chart(tool_data, tools, bar_colors, failed_tools)
+        self._create_graph_density_chart(tool_data, tools, bar_colors, failed_tools)
         self._create_similarity_heatmap(tool_data, failed_tools)
         
-        # Export high-level and low-level data to CSV
-        self._export_level_data_to_csv(tool_data, tool_level_data, "function_level_analysis")
+        # Export data to CSV
+        self.export_to_csv(comparison)
     
-    def _create_function_discovery_chart(self, tool_data, tool_level_data, tools, bar_colors, failed_tools):
-        """Create function discovery comparison chart"""
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+    def _create_basic_block_discovery_chart(self, tool_data, tools, bar_colors, failed_tools):
+        """Create basic block discovery comparison chart"""
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
         
-        # Total function count comparison
-        self._create_bar_chart(ax1, tools, 
-                              [len(data['functions']) for data in tool_data.values()],
-                              bar_colors, failed_tools, 'Total Function Discovery', 'Number of Functions')
-        
-        # High-level function count comparison
-        self._create_bar_chart(ax2, tools,
-                              [len(tool_level_data[t]['high_level_funcs']) for t in tools],
-                              bar_colors, failed_tools, 'High-Level Function Discovery', 'Number of Functions')
-        
-        # Low-level function count comparison
-        self._create_bar_chart(ax3, tools,
-                              [len(tool_level_data[t]['low_level_funcs']) for t in tools],
-                              bar_colors, failed_tools, 'Low-Level Function Discovery', 'Number of Functions')
+        # Total basic block count comparison
+        self._create_bar_chart(ax, tools, 
+                              [len(data['basic_blocks']) for data in tool_data.values()],
+                              bar_colors, failed_tools, 'Basic Block Discovery Comparison', 'Number of Basic Blocks')
         
         plt.tight_layout()
-        plt.savefig('result/function_discovery_comparison.png', dpi=300, bbox_inches='tight')
-        print("Function discovery comparison chart saved as result/function_discovery_comparison.png")
-    
-    def _create_call_relationship_chart(self, tool_data, tool_level_data, tools, bar_colors, failed_tools):
-        """Create call relationship comparison chart"""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(18, 12))
+        plt.savefig('result/basic_block_discovery_comparison.png', dpi=300, bbox_inches='tight')
+        print("Basic block discovery comparison chart saved as result/basic_block_discovery_comparison.png")
+
+    def _create_control_flow_chart(self, tool_data, tools, bar_colors, failed_tools):
+        """Create control flow comparison chart"""
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
         
-        # Total call relationship comparison
-        self._create_bar_chart(ax1, tools,
-                              [len(data['calls']) for data in tool_data.values()],
-                              bar_colors, failed_tools, 'Total Call Relationships', 'Number of Calls')
-        
-        # High-level call relationship comparison
-        self._create_bar_chart(ax2, tools,
-                              [len(tool_level_data[t]['high_level_calls']) for t in tools],
-                              bar_colors, failed_tools, 'High-Level Call Relationships', 'Number of Calls')
-        
-        # Low-level call relationship comparison
-        self._create_bar_chart(ax3, tools,
-                              [len(tool_level_data[t]['low_level_calls']) for t in tools],
-                              bar_colors, failed_tools, 'Low-Level Call Relationships', 'Number of Calls')
-        
-        # Mixed-level call relationship comparison
-        self._create_bar_chart(ax4, tools,
-                              [len(tool_level_data[t]['mixed_level_calls']) for t in tools],
-                              bar_colors, failed_tools, 'Mixed-Level Call Relationships', 'Number of Calls')
+        # Total control flow edge comparison
+        self._create_bar_chart(ax, tools,
+                              [len(data['edges']) for data in tool_data.values()],
+                              bar_colors, failed_tools, 'Control Flow Edge Comparison', 'Number of Edges')
         
         plt.tight_layout()
-        plt.savefig('result/call_relationship_comparison.png', dpi=300, bbox_inches='tight')
-        print("Call relationship comparison chart saved as result/call_relationship_comparison.png")
-    
-    def _create_graph_density_chart(self, tool_data, tool_level_data, tools, bar_colors, failed_tools):
+        plt.savefig('result/control_flow_comparison.png', dpi=300, bbox_inches='tight')
+        print("Control flow comparison chart saved as result/control_flow_comparison.png")
+
+    def _create_graph_density_chart(self, tool_data, tools, bar_colors, failed_tools):
         """Create graph density comparison chart"""
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
         
         # Total graph density comparison
         densities = [self._calculate_graph_metrics(data['graph'])['density'] for data in tool_data.values()]
-        self._create_bar_chart(ax1, tools, densities, bar_colors, failed_tools, 
-                              'Total Graph Density', 'Graph Density', format_values=True)
-        
-        # High-level graph density comparison
-        high_densities = [self._calculate_graph_metrics(tool_level_data[t]['high_level_graph'])['density'] for t in tools]
-        self._create_bar_chart(ax2, tools, high_densities, bar_colors, failed_tools,
-                              'High-Level Graph Density', 'Graph Density', format_values=True)
-        
-        # Low-level graph density comparison
-        low_densities = [self._calculate_graph_metrics(tool_level_data[t]['low_level_graph'])['density'] for t in tools]
-        self._create_bar_chart(ax3, tools, low_densities, bar_colors, failed_tools,
-                              'Low-Level Graph Density', 'Graph Density', format_values=True)
+        self._create_bar_chart(ax, tools, densities, bar_colors, failed_tools, 
+                              'Graph Density Comparison', 'Graph Density', format_values=True)
         
         plt.tight_layout()
         plt.savefig('result/graph_density_comparison.png', dpi=300, bbox_inches='tight')
         print("Graph density comparison chart saved as result/graph_density_comparison.png")
-    
-    def _export_level_data_to_csv(self, tool_data, tool_level_data, output_prefix: str):
-        """Export high-level and low-level function data to CSV files"""
-        tools = list(tool_level_data.keys())
-        
-        # 1. Export high-level and low-level function statistics
-        level_stats_data = []
-        for tool_name in tools:
-            data = tool_level_data[tool_name]
-            high_metrics = self._calculate_graph_metrics(data['high_level_graph'])
-            low_metrics = self._calculate_graph_metrics(data['low_level_graph'])
-            
-            level_stats_data.append({
-                'Tool': tool_name,
-                'Total Functions': len(data['high_level_funcs']) + len(data['low_level_funcs']),
-                'High-Level Functions': len(data['high_level_funcs']),
-                'Low-Level Functions': len(data['low_level_funcs']),
-                'High-Level Function Ratio (%)': round(len(data['high_level_funcs']) / (len(data['high_level_funcs']) + len(data['low_level_funcs'])) * 100, 2) if (len(data['high_level_funcs']) + len(data['low_level_funcs'])) > 0 else 0,
-                'High-Level Calls': len(data['high_level_calls']),
-                'Low-Level Calls': len(data['low_level_calls']),
-                'High-Level Graph Density': round(high_metrics['density'], 6),
-                'Low-Level Graph Density': round(low_metrics['density'], 6),
-                'High-Level Strong Components': high_metrics['strongly_connected_components'],
-                'Low-Level Strong Components': low_metrics['strongly_connected_components']
-            })
-        
-        level_stats_df = pd.DataFrame(level_stats_data)
-        level_stats_df.to_csv(f"result/{output_prefix}_statistics.csv", index=False, encoding='utf-8')
-        
-        # 2. Export call relationships with level classification
-        all_high_level_calls = set()
-        all_low_level_calls = set()
-        
-        for data in tool_level_data.values():
-            all_high_level_calls |= data['high_level_calls']
-            all_low_level_calls |= data['low_level_calls']
-        
-        # Combine all calls and classify them
-        all_calls_with_level = []
-        
-        # Add high-level calls
-        for caller, callee in sorted(all_high_level_calls):
-            row = {'Caller': caller, 'Callee': callee, 'Call Type': 'High-High'}
-            for tool in tools:
-                row[tool] = 'Y' if (caller, callee) in tool_level_data[tool]['high_level_calls'] else 'N'
-            all_calls_with_level.append(row)
-        
-        # Add low-level calls
-        for caller, callee in sorted(all_low_level_calls):
-            row = {'Caller': caller, 'Callee': callee, 'Call Type': 'Low-Low'}
-            for tool in tools:
-                row[tool] = 'Y' if (caller, callee) in tool_level_data[tool]['low_level_calls'] else 'N'
-            all_calls_with_level.append(row)
-        
-        # Check for mixed-level calls (high->low or low->high)
-        all_mixed_calls = set()
-        for tool_name, level_data in tool_level_data.items():
-            original_calls = tool_data[tool_name]['calls']  # Get original calls from tool_data
-            for caller, callee in original_calls:
-                # Check if this is a mixed-level call
-                caller_is_high = caller in level_data['high_level_funcs']
-                callee_is_high = callee in level_data['high_level_funcs']
-                
-                if (caller_is_high and not callee_is_high) or (not caller_is_high and callee_is_high):
-                    all_mixed_calls.add((caller, callee, 'Mixed-Level'))
-        
-        # Add mixed-level calls
-        for caller, callee, call_type in sorted(all_mixed_calls):
-            row = {'Caller': caller, 'Callee': callee, 'Call Type': call_type}
-            for tool in tools:
-                # Check if this call exists in the tool's original call data
-                row[tool] = 'Y' if (caller, callee) in tool_data[tool]['calls'] else 'N'
-            all_calls_with_level.append(row)
-        
-        calls_df = pd.DataFrame(all_calls_with_level)
-        calls_df.to_csv(f"result/{output_prefix}_calls.csv", index=False, encoding='utf-8')
-        
-        print(f"High-level/low-level function analysis data exported to:")
-        print(f"  - result/{output_prefix}_statistics.csv (statistics summary)")
-        print(f"  - result/{output_prefix}_calls.csv (call relationships with level classification)")
-    
+
     def _create_bar_chart(self, ax, tools, values, colors, failed_tools, title, ylabel, format_values=False):
         """Helper function to create bar charts"""
         bars = ax.bar(tools, values, color=colors)
@@ -844,10 +615,10 @@ class MultiCallGraphComparator:
                 elif tool1 in failed_tools or tool2 in failed_tools:
                     similarity_matrix[i][j] = -1
                 else:
-                    func1 = tool_data[tool1]['functions']
-                    func2 = tool_data[tool2]['functions']
-                    common = len(func1 & func2)
-                    union = len(func1 | func2)
+                    blocks1 = tool_data[tool1]['basic_blocks']
+                    blocks2 = tool_data[tool2]['basic_blocks']
+                    common = len(blocks1 & blocks2)
+                    union = len(blocks1 | blocks2)
                     similarity_matrix[i][j] = common / union if union > 0 else 0
         
         # Create custom colormap to handle failures and improve high similarity visibility
@@ -864,7 +635,7 @@ class MultiCallGraphComparator:
         custom_cmap = mcolors.LinearSegmentedColormap.from_list('light_blues', colors, N=256)
         
         im = ax.imshow(display_matrix, cmap=custom_cmap, aspect='auto', vmin=0, vmax=1)
-        ax.set_title('Function Discovery Jaccard Similarity', fontsize=16, fontweight='bold')
+        ax.set_title('Basic Block Discovery Jaccard Similarity', fontsize=16, fontweight='bold')
         ax.set_xticks(range(n_tools))
         ax.set_yticks(range(n_tools))
         ax.set_xticklabels(tools, rotation=45)
@@ -891,14 +662,14 @@ class MultiCallGraphComparator:
         plt.savefig('result/similarity_heatmap.png', dpi=300, bbox_inches='tight')
         print("Similarity heatmap saved as result/similarity_heatmap.png")
     
-    def export_to_csv(self, comparison: Dict, output_prefix: str = "multi_comparison"):
+    def export_to_csv(self, comparison: Dict, output_prefix: str = "multi_cfg_comparison"):
         """Export comparison results to CSV files"""
         tool_data = comparison['tool_data']
         
         # Identify failed tools
         failed_tools = []
         for tool_name, data in tool_data.items():
-            if len(data['functions']) == 0 and len(data['calls']) == 0:
+            if len(data['basic_blocks']) == 0 and len(data['edges']) == 0:
                 failed_tools.append(tool_name)
         
         # 1. Export basic statistics
@@ -909,8 +680,8 @@ class MultiCallGraphComparator:
             stats_data.append({
                 'Tool': tool_name,
                 'Status': status,
-                'Function Count': len(data['functions']),
-                'Call Relationship Count': len(data['calls']),
+                'Basic Block Count': len(data['basic_blocks']),
+                'Control Flow Edge Count': len(data['edges']),
                 'Average In-Degree': round(metrics['avg_in_degree'], 3),
                 'Average Out-Degree': round(metrics['avg_out_degree'], 3),
                 'Max In-Degree': metrics['max_in_degree'],
@@ -934,10 +705,10 @@ class MultiCallGraphComparator:
                 elif tool1 in failed_tools or tool2 in failed_tools:
                     row[tool2] = 'N/A'  # Mark failed tools as N/A
                 else:
-                    func1 = tool_data[tool1]['functions']
-                    func2 = tool_data[tool2]['functions']
-                    common = len(func1 & func2)
-                    union = len(func1 | func2)
+                    blocks1 = tool_data[tool1]['basic_blocks']
+                    blocks2 = tool_data[tool2]['basic_blocks']
+                    common = len(blocks1 & blocks2)
+                    union = len(blocks1 | blocks2)
                     jaccard = common / union if union > 0 else 0
                     row[tool2] = round(jaccard, 4)
             similarity_data.append(row)
@@ -945,54 +716,33 @@ class MultiCallGraphComparator:
         similarity_df = pd.DataFrame(similarity_data)
         similarity_df.to_csv(f"result/{output_prefix}_similarity.csv", index=False, encoding='utf-8')
         
-        # 3. Export function comparison with level classification
-        all_functions = sorted(comparison['all_functions'])
+        # 3. Export basic block comparison (simplified, no level classification)
+        all_basic_blocks = sorted(comparison['all_basic_blocks'])
         
-        # Create combined classification for all functions
-        all_high_level_funcs = set()
-        all_low_level_funcs = set()
+        block_data = []
         
-        # Collect all function classifications from all tools
-        for tool_name, data in tool_data.items():
-            if tool_name not in failed_tools:
-                classification = self._classify_functions(data['functions'])
-                all_high_level_funcs |= classification['high_level']
-                all_low_level_funcs |= classification['low_level']
-        
-        func_data = []
-        
-        for func in all_functions:
-            # Determine function level - if classified as high-level by any tool, mark as high-level
-            if func in all_high_level_funcs:
-                func_level = 'High-Level'
-            elif func in all_low_level_funcs:
-                func_level = 'Low-Level'
-            else:
-                # Fallback classification for unclassified functions
-                classification = self._classify_functions({func})
-                func_level = 'High-Level' if func in classification['high_level'] else 'Low-Level'
-            
-            row = {'Function Name': func, 'Level': func_level}
+        for block in all_basic_blocks:
+            row = {'Basic Block': block}
             for tool in tools:
                 if tool in failed_tools:
                     row[tool] = 'N/A'  # Mark failed tools as N/A
                 else:
-                    row[tool] = 'Y' if func in tool_data[tool]['functions'] else 'N'
-            func_data.append(row)
+                    row[tool] = 'Y' if block in tool_data[tool]['basic_blocks'] else 'N'
+            block_data.append(row)
         
-        func_df = pd.DataFrame(func_data)
-        func_df.to_csv(f"result/{output_prefix}_functions.csv", index=False, encoding='utf-8')
+        block_df = pd.DataFrame(block_data)
+        block_df.to_csv(f"result/{output_prefix}_basic_blocks.csv", index=False, encoding='utf-8')
         
         print(f"Comparison results exported to:")
         print(f"  - result/{output_prefix}_statistics.csv")
         print(f"  - result/{output_prefix}_similarity.csv")
-        print(f"  - result/{output_prefix}_functions.csv")
+        print(f"  - result/{output_prefix}_basic_blocks.csv")
         
         if failed_tools:
             print(f"⚠️  Note: {', '.join(failed_tools)} tool analysis failed, marked as 'N/A' in CSV files")
     
     def _perform_gcc_coverage_analysis(self, comparison: Dict) -> Dict:
-        """Perform GCC-based coverage analysis - calculate percentage of GCC functions/calls found in other tools"""
+        """Perform GCC-based coverage analysis - calculate percentage of GCC basic blocks/edges found in other tools"""
         tool_data = comparison['tool_data']
         
         # Check if GCC data exists and is valid
@@ -1001,62 +751,62 @@ class MultiCallGraphComparator:
             return None
             
         gcc_data = tool_data['GCC']
-        if len(gcc_data['functions']) == 0 and len(gcc_data['calls']) == 0:
+        if len(gcc_data['basic_blocks']) == 0 and len(gcc_data['edges']) == 0:
             print("⚠️  Warning: GCC data is empty, skipping coverage analysis")
             return None
         
-        gcc_functions = gcc_data['functions']
-        gcc_calls = gcc_data['calls']
+        gcc_basic_blocks = gcc_data['basic_blocks']
+        gcc_edges = gcc_data['edges']
         
         print(f"\n📊 GCC Coverage Analysis:")
         print(f"Using GCC as reference standard:")
-        print(f"  - GCC functions: {len(gcc_functions)}")
-        print(f"  - GCC calls: {len(gcc_calls)}")
+        print(f"  - GCC basic blocks: {len(gcc_basic_blocks)}")
+        print(f"  - GCC edges: {len(gcc_edges)}")
         
         coverage_results = {}
         
-        # Analyze each tool's coverage of GCC functions and calls
+        # Analyze each tool's coverage of GCC basic blocks and edges
         for tool_name, data in tool_data.items():
             if tool_name == 'GCC':
                 continue  # Skip GCC itself
                 
-            tool_functions = data['functions']
-            tool_calls = data['calls']
+            tool_basic_blocks = data['basic_blocks']
+            tool_edges = data['edges']
             
-            # Calculate function coverage
-            if len(gcc_functions) > 0:
-                common_functions = gcc_functions & tool_functions
-                function_coverage = len(common_functions) / len(gcc_functions) * 100
+            # Calculate basic block coverage
+            if len(gcc_basic_blocks) > 0:
+                common_basic_blocks = gcc_basic_blocks & tool_basic_blocks
+                block_coverage = len(common_basic_blocks) / len(gcc_basic_blocks) * 100
             else:
-                function_coverage = 0
-                common_functions = set()
+                block_coverage = 0
+                common_basic_blocks = set()
             
-            # Calculate call coverage
-            if len(gcc_calls) > 0:
-                common_calls = gcc_calls & tool_calls
-                call_coverage = len(common_calls) / len(gcc_calls) * 100
+            # Calculate edge coverage
+            if len(gcc_edges) > 0:
+                common_edges = gcc_edges & tool_edges
+                edge_coverage = len(common_edges) / len(gcc_edges) * 100
             else:
-                call_coverage = 0
-                common_calls = set()
+                edge_coverage = 0
+                common_edges = set()
             
             coverage_results[tool_name] = {
-                'function_coverage': function_coverage,
-                'call_coverage': call_coverage,
-                'common_functions': common_functions,
-                'common_calls': common_calls,
-                'gcc_functions_found': len(common_functions),
-                'gcc_calls_found': len(common_calls),
-                'tool_total_functions': len(tool_functions),
-                'tool_total_calls': len(tool_calls)
+                'block_coverage': block_coverage,
+                'edge_coverage': edge_coverage,
+                'common_basic_blocks': common_basic_blocks,
+                'common_edges': common_edges,
+                'gcc_blocks_found': len(common_basic_blocks),
+                'gcc_edges_found': len(common_edges),
+                'tool_total_blocks': len(tool_basic_blocks),
+                'tool_total_edges': len(tool_edges)
             }
             
             print(f"  {tool_name}:")
-            print(f"    - Function coverage: {function_coverage:.1f}% ({len(common_functions)}/{len(gcc_functions)})")
-            print(f"    - Call coverage: {call_coverage:.1f}% ({len(common_calls)}/{len(gcc_calls)})")
+            print(f"    - Basic block coverage: {block_coverage:.1f}% ({len(common_basic_blocks)}/{len(gcc_basic_blocks)})")
+            print(f"    - Edge coverage: {edge_coverage:.1f}% ({len(common_edges)}/{len(gcc_edges)})")
         
         return {
-            'gcc_functions': gcc_functions,
-            'gcc_calls': gcc_calls,
+            'gcc_basic_blocks': gcc_basic_blocks,
+            'gcc_edges': gcc_edges,
             'coverage_results': coverage_results
         }
     
@@ -1072,49 +822,49 @@ class MultiCallGraphComparator:
         for tool_name, results in coverage_results.items():
             stats_data.append({
                 'Tool': tool_name,
-                'GCC Functions Found': results['gcc_functions_found'],
-                'Total GCC Functions': len(coverage_analysis['gcc_functions']),
-                'Function Coverage (%)': round(results['function_coverage'], 2),
-                'GCC Calls Found': results['gcc_calls_found'],
-                'Total GCC Calls': len(coverage_analysis['gcc_calls']),
-                'Call Coverage (%)': round(results['call_coverage'], 2),
-                'Tool Total Functions': results['tool_total_functions'],
-                'Tool Total Calls': results['tool_total_calls']
+                'GCC Basic Blocks Found': results['gcc_blocks_found'],
+                'Total GCC Basic Blocks': len(coverage_analysis['gcc_basic_blocks']),
+                'Block Coverage (%)': round(results['block_coverage'], 2),
+                'GCC Edges Found': results['gcc_edges_found'],
+                'Total GCC Edges': len(coverage_analysis['gcc_edges']),
+                'Edge Coverage (%)': round(results['edge_coverage'], 2),
+                'Tool Total Basic Blocks': results['tool_total_blocks'],
+                'Tool Total Edges': results['tool_total_edges']
             })
         
         stats_df = pd.DataFrame(stats_data)
         stats_df.to_csv(f"result/{output_prefix}_statistics.csv", index=False, encoding='utf-8')
         
-        # 2. Export detailed function coverage
-        gcc_functions = sorted(coverage_analysis['gcc_functions'])
-        func_coverage_data = []
+        # 2. Export detailed basic block coverage
+        gcc_basic_blocks = sorted(coverage_analysis['gcc_basic_blocks'])
+        block_coverage_data = []
         
-        for func in gcc_functions:
-            row = {'Function Name': func, 'In GCC': 'Y'}
+        for block in gcc_basic_blocks:
+            row = {'Basic Block': block, 'In GCC': 'Y'}
             for tool_name, results in coverage_results.items():
-                row[tool_name] = 'Y' if func in results['common_functions'] else 'N'
-            func_coverage_data.append(row)
+                row[tool_name] = 'Y' if block in results['common_basic_blocks'] else 'N'
+            block_coverage_data.append(row)
         
-        func_coverage_df = pd.DataFrame(func_coverage_data)
-        func_coverage_df.to_csv(f"result/{output_prefix}_functions.csv", index=False, encoding='utf-8')
+        block_coverage_df = pd.DataFrame(block_coverage_data)
+        block_coverage_df.to_csv(f"result/{output_prefix}_basic_blocks.csv", index=False, encoding='utf-8')
         
-        # 3. Export detailed call coverage
-        gcc_calls = sorted(coverage_analysis['gcc_calls'])
-        call_coverage_data = []
+        # 3. Export detailed edge coverage
+        gcc_edges = sorted(coverage_analysis['gcc_edges'])
+        edge_coverage_data = []
         
-        for caller, callee in gcc_calls:
-            row = {'Caller': caller, 'Callee': callee, 'In GCC': 'Y'}
+        for source, target in gcc_edges:
+            row = {'Source': source, 'Target': target, 'In GCC': 'Y'}
             for tool_name, results in coverage_results.items():
-                row[tool_name] = 'Y' if (caller, callee) in results['common_calls'] else 'N'
-            call_coverage_data.append(row)
+                row[tool_name] = 'Y' if (source, target) in results['common_edges'] else 'N'
+            edge_coverage_data.append(row)
         
-        call_coverage_df = pd.DataFrame(call_coverage_data)
-        call_coverage_df.to_csv(f"result/{output_prefix}_calls.csv", index=False, encoding='utf-8')
+        edge_coverage_df = pd.DataFrame(edge_coverage_data)
+        edge_coverage_df.to_csv(f"result/{output_prefix}_edges.csv", index=False, encoding='utf-8')
         
         print(f"\nGCC coverage analysis exported to:")
         print(f"  - result/{output_prefix}_statistics.csv (coverage statistics)")
-        print(f"  - result/{output_prefix}_functions.csv (function-level coverage)")
-        print(f"  - result/{output_prefix}_calls.csv (call-level coverage)")
+        print(f"  - result/{output_prefix}_basic_blocks.csv (basic block-level coverage)")
+        print(f"  - result/{output_prefix}_edges.csv (edge-level coverage)")
     
     def _create_gcc_coverage_chart(self, coverage_analysis: Dict, output_prefix: str = "gcc_coverage"):
         """Create GCC coverage comparison chart"""
@@ -1125,8 +875,8 @@ class MultiCallGraphComparator:
         tools = list(coverage_results.keys())
         
         # Prepare data for visualization
-        function_coverages = [coverage_results[tool]['function_coverage'] for tool in tools]
-        call_coverages = [coverage_results[tool]['call_coverage'] for tool in tools]
+        block_coverages = [coverage_results[tool]['block_coverage'] for tool in tools]
+        edge_coverages = [coverage_results[tool]['edge_coverage'] for tool in tools]
         
         # Create chart
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -1135,28 +885,28 @@ class MultiCallGraphComparator:
         colors = ['#ff7f0e', '#9467bd', '#2ca02c', '#d62728', '#17becf']
         bar_colors = [colors[i % len(colors)] for i in range(len(tools))]
         
-        # Function coverage chart
-        bars1 = ax1.bar(tools, function_coverages, color=bar_colors)
-        ax1.set_title('Function Coverage vs GCC Reference', fontsize=14, fontweight='bold')
+        # Basic block coverage chart
+        bars1 = ax1.bar(tools, block_coverages, color=bar_colors)
+        ax1.set_title('Basic Block Coverage vs GCC Reference', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Coverage Percentage (%)')
         ax1.set_xlabel('Analysis Tools')
         ax1.set_ylim(0, 100)
         
         # Add percentage labels on bars
-        for bar, coverage in zip(bars1, function_coverages):
+        for bar, coverage in zip(bars1, block_coverages):
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width()/2, height + 1,
                     f'{coverage:.1f}%', ha='center', va='bottom', fontweight='bold')
         
-        # Call coverage chart
-        bars2 = ax2.bar(tools, call_coverages, color=bar_colors)
-        ax2.set_title('Call Relationship Coverage vs GCC Reference', fontsize=14, fontweight='bold')
+        # Edge coverage chart
+        bars2 = ax2.bar(tools, edge_coverages, color=bar_colors)
+        ax2.set_title('Control Flow Edge Coverage vs GCC Reference', fontsize=14, fontweight='bold')
         ax2.set_ylabel('Coverage Percentage (%)')
         ax2.set_xlabel('Analysis Tools')
         ax2.set_ylim(0, 100)
         
         # Add percentage labels on bars
-        for bar, coverage in zip(bars2, call_coverages):
+        for bar, coverage in zip(bars2, edge_coverages):
             height = bar.get_height()
             ax2.text(bar.get_x() + bar.get_width()/2, height + 1,
                     f'{coverage:.1f}%', ha='center', va='bottom', fontweight='bold')

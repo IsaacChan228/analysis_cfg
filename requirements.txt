@@ -1,4 +1,4 @@
-# Multi-Tool Call Graph Comparison Analysis Requirements
+# Multi-Tool Control Flow Graph Comparison Analysis Requirements
 # Install with: pip install -r requirements.txt
 # Verify installation with: python verify_setup.py
 

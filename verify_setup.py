@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup verification script for Multi-Tool Call Graph Comparison Framework
+Setup verification script for Multi-Tool Control Flow Graph Comparison Framework
 Run this script to verify that all required dependencies are properly installed.
 """
 
@@ -28,7 +28,7 @@ def check_package(package_name, min_version=None):
 
 def main():
     """Main verification function"""
-    print("🔍 Verifying Multi-Tool Call Graph Analysis Framework Setup...")
+    print("🔍 Verifying Multi-Tool Control Flow Graph Analysis Framework Setup...")
     print("=" * 60)
     
     # Required packages with minimum versions
@@ -78,7 +78,7 @@ def main():
         print("🎉 All required dependencies are installed!")
         print("✅ Framework is ready to use.")
         print("\n💡 Quick start:")
-        print("   1. Place your call graph files in the graph/ directory")
+        print("   1. Place your control flow graph files in the graph/ directory")
         print("   2. Run: python3 run_analysis.py")
         return 0
     else:
