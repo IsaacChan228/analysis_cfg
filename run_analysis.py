@@ -31,22 +31,14 @@ def main():
         print("\nExporting comparison results to CSV files...")
         comparator.export_to_csv(comparison, "multi_cfg_comparison")
         
-        print("\nPerforming GCC coverage analysis...")
-        gcc_coverage = comparator._perform_gcc_coverage_analysis(comparison)
-        if gcc_coverage:
-            comparator._export_gcc_coverage_to_csv(gcc_coverage, "gcc_coverage_analysis")
-            comparator._create_gcc_coverage_chart(gcc_coverage, "gcc_coverage_analysis")
-        
         print("\n✅ Analysis complete!")
         print("📁 Output files:")
         print("  - analysis_log.txt (complete log)")
         print("  - result/basic_block_discovery_comparison.png (basic block discovery comparison)")
         print("  - result/control_flow_comparison.png (control flow comparison)")
         print("  - result/graph_density_comparison.png (graph density comparison)")
-        print("  - result/similarity_heatmap.png (similarity heatmap)")
-        print("  - result/gcc_coverage_analysis_comparison.png (GCC coverage analysis)")
-        print("  - result/multi_cfg_comparison_*.csv (basic comparison data)")
-        print("  - result/gcc_coverage_analysis_*.csv (GCC coverage analysis data)")
+        print("  - result/similarity_heatmap.png (structural similarity heatmap)")
+        print("  - result/multi_cfg_comparison_*.csv (structural comparison data)")
         
     except (FileNotFoundError, ValueError) as e:
         print(f"❌ Fatal error during analysis: {e}")

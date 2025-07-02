@@ -42,6 +42,10 @@ class CFGNormalizer:
         # Remove various prefixes for addresses and labels
         name = re.sub(r'^(dbg\.|sym\.|fcn\.|reloc\.|imp\.|unk\.)', '', name)
         
+        # Handle GCC basic block format (bb_N)
+        if name.startswith('bb_') and name[3:].isdigit():
+            return name  # Keep GCC format as-is
+        
         # For CFG, we typically work with addresses as basic block identifiers
         # Keep address format but normalize it
         if re.match(r'^0x[0-9a-f]+$', name, re.IGNORECASE):
@@ -78,7 +82,7 @@ class CFGNormalizer:
         # For CFG analysis, preserve more identifiers including labels
         return name
     
-    def extract_from_dot(self, dot_file: str, tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
+    def extract_from_dot(self, dot_file: str, tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]], str]:
         """Extract standardized basic blocks and control flow edges from DOT files"""
         basic_blocks = set()
         edges = set()
@@ -89,7 +93,7 @@ class CFGNormalizer:
         except FileNotFoundError:
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: {tool_name} file not found ({dot_file}) - This is expected as {tool_name} may fail")
-                return basic_blocks, edges
+                return basic_blocks, edges, None
             else:
                 print(f"❌ Fatal Error: Required {tool_name} file not found ({dot_file})")
                 print(f"Program will terminate. Please ensure all required CFG files exist.")
@@ -97,7 +101,7 @@ class CFGNormalizer:
         except Exception as e:
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: Cannot read {tool_name} file ({dot_file}): {e} - Will skip this tool")
-                return basic_blocks, edges
+                return basic_blocks, edges, None
             else:
                 print(f"❌ Fatal Error: Cannot read required {tool_name} file ({dot_file}): {e}")
                 print(f"Program will terminate.")
@@ -107,7 +111,7 @@ class CFGNormalizer:
         if not content.strip():
             if tool_name.lower() in self.OPTIONAL_TOOLS:
                 print(f"⚠️  Warning: {tool_name} file is empty or has no content - This is acceptable")
-                return basic_blocks, edges
+                return basic_blocks, edges, None
             else:
                 print(f"❌ Fatal Error: Required {tool_name} file is empty or has no content")
                 print(f"Program will terminate. Please check the CFG file generation process.")
@@ -117,6 +121,9 @@ class CFGNormalizer:
             basic_blocks, edges = self._extract_from_ghidra_gf(content)
         else:
             basic_blocks, edges = self._extract_from_standard_dot(content)
+        
+        # Find entry point for this tool
+        entry_point = self.find_entry_point(content, tool_name)
         
         # Check if data was successfully extracted
         if len(basic_blocks) == 0 and len(edges) == 0:
@@ -142,7 +149,7 @@ class CFGNormalizer:
         # Explicitly deduplicate and clean the data
         basic_blocks, edges = self._deduplicate_data(basic_blocks, edges, tool_name)
         
-        return basic_blocks, edges
+        return basic_blocks, edges, entry_point
     
     def _extract_from_standard_dot(self, content: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
         """Extract from standard DOT format"""
@@ -150,6 +157,7 @@ class CFGNormalizer:
         edges = set()
         
         # Extract node definitions - for CFG, nodes represent basic blocks
+        # Try quoted node names first (standard DOT format)
         node_pattern = r'"([^"]+)"\s*\[.*?label="([^"]*)'
         for match in re.finditer(node_pattern, content):
             node_id = match.group(1)
@@ -172,7 +180,25 @@ class CFGNormalizer:
                 if normalized:
                     basic_blocks.add(normalized)
         
+        # GCC format: unquoted node names with specific patterns
+        if not basic_blocks:
+            gcc_node_pattern = r'(\w+)\s*\[.*?label="([^"]*)'
+            for match in re.finditer(gcc_node_pattern, content):
+                node_id = match.group(1)
+                block_label = match.group(2) if match.group(2) else node_id
+                
+                # GCC uses patterns like fn_72_basic_block_68
+                if 'basic_block' in node_id:
+                    # Extract the basic block number/identifier
+                    bb_match = re.search(r'basic_block_(\d+)', node_id)
+                    if bb_match:
+                        bb_num = bb_match.group(1)
+                        normalized = self.normalize_block_name(f"bb_{bb_num}")
+                        if normalized:
+                            basic_blocks.add(normalized)
+        
         # Extract edges (control flow relationships)
+        # Standard DOT format with quoted names
         edge_pattern = r'"([^"]+)"\s*->\s*"([^"]+)"'
         for match in re.finditer(edge_pattern, content):
             source = match.group(1)
@@ -184,6 +210,25 @@ class CFGNormalizer:
             
             if source_normalized and target_normalized:
                 edges.add((source_normalized, target_normalized))
+        
+        # GCC format: unquoted names with port specifications (e.g., fn_72_basic_block_0:s -> fn_72_basic_block_2:n)
+        gcc_edge_pattern = r'(\w+)(?::\w+)?\s*->\s*(\w+)(?::\w+)?'
+        for match in re.finditer(gcc_edge_pattern, content):
+            source = match.group(1)
+            target = match.group(2)
+            
+            # Only process if they look like GCC basic block identifiers
+            if 'basic_block' in source and 'basic_block' in target:
+                # Extract basic block numbers
+                source_bb = re.search(r'basic_block_(\d+)', source)
+                target_bb = re.search(r'basic_block_(\d+)', target)
+                
+                if source_bb and target_bb:
+                    source_normalized = self.normalize_block_name(f"bb_{source_bb.group(1)}")
+                    target_normalized = self.normalize_block_name(f"bb_{target_bb.group(1)}")
+                    
+                    if source_normalized and target_normalized:
+                        edges.add((source_normalized, target_normalized))
         
         return basic_blocks, edges
     
@@ -219,16 +264,6 @@ class CFGNormalizer:
         
         return basic_blocks, edges
     
-    def _find_block_name_in_content(self, content: str, identifier: str) -> str:
-        """Find block name corresponding to identifier in content"""
-        # Look for corresponding label
-        pattern = rf'"{re.escape(identifier)}"\s*\[.*?label="([^"]*)"'
-        match = re.search(pattern, content)
-        if match:
-            label = match.group(1)
-            return label.split('\\n')[0] if '\\n' in label else label
-        return identifier
-    
     def _deduplicate_data(self, basic_blocks: Set[str], edges: Set[Tuple[str, str]], tool_name: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
         """Explicitly deduplicate basic blocks and edges with logging"""
         original_block_count = len(basic_blocks)
@@ -262,6 +297,51 @@ class CFGNormalizer:
         
         return deduplicated_blocks, filtered_edges
 
+    def find_entry_point(self, content: str, tool_name: str) -> str:
+        """Find the main function entry point for each tool"""
+        tool_name_lower = tool_name.lower()
+        
+        if tool_name_lower == 'gcc':
+            # GCC: Look for ENTRY node or first node in main cluster
+            entry_match = re.search(r'(fn_\d+_basic_block_\d+)\s*\[.*?label="ENTRY"', content)
+            if entry_match:
+                bb_match = re.search(r'basic_block_(\d+)', entry_match.group(1))
+                if bb_match:
+                    return f"bb_{bb_match.group(1)}"
+            
+            # Fallback: look for first basic block in main cluster
+            main_cluster_match = re.search(r'subgraph\s+"?cluster_main"?.*?fn_\d+_basic_block_(\d+)', content, re.DOTALL)
+            if main_cluster_match:
+                return f"bb_{main_cluster_match.group(1)}"
+                
+        elif tool_name_lower == 'ghidra':
+            # Ghidra: Look for main symbol or first address
+            main_match = re.search(r'"([^"]+)"\s*\[.*?Symbols="main"', content)
+            if main_match:
+                return self.normalize_block_name(main_match.group(1))
+            
+            # Fallback: first node in the graph
+            first_node_match = re.search(r'"([^"]+)"\s*\[', content)
+            if first_node_match:
+                return self.normalize_block_name(first_node_match.group(1))
+                
+        elif tool_name_lower.startswith('angr') or tool_name_lower == 'radare2':
+            # Angr/Radare2: Look for main comments or first node
+            main_comment_match = re.search(r'"([^"]+)"\s*\[.*?main', content, re.IGNORECASE)
+            if main_comment_match:
+                return self.normalize_block_name(main_comment_match.group(1))
+            
+            # Look for first node that looks like a main address (common pattern: 0x4xxxxx)
+            first_main_addr = re.search(r'"(0x[4-6][0-9a-f]{5,})"', content)
+            if first_main_addr:
+                return self.normalize_block_name(first_main_addr.group(1))
+            
+            # Fallback: first node in the graph
+            first_node_match = re.search(r'"([^"]+)"\s*\[', content)
+            if first_node_match:
+                return self.normalize_block_name(first_node_match.group(1))
+        
+        return None
 class MultiCFGComparator:
     """Multi control flow graph comparison analyzer"""
     
@@ -285,13 +365,15 @@ class MultiCFGComparator:
         for tool_name, file_path in self.tools.items():
             print(f"Standardizing {tool_name} control flow graph...")
             try:
-                basic_blocks, edges = self.normalizer.extract_from_dot(file_path, tool_name)
+                basic_blocks, edges, entry_point = self.normalizer.extract_from_dot(file_path, tool_name)
                 tool_data[tool_name] = {
                     'basic_blocks': basic_blocks,
                     'edges': edges,
+                    'entry_point': entry_point,
                     'graph': self._create_graph(basic_blocks, edges)
                 }
-                print(f"{tool_name}: {len(basic_blocks)} basic blocks, {len(edges)} control flow edges")
+                entry_info = f" (entry: {entry_point})" if entry_point else " (no entry point)"
+                print(f"{tool_name}: {len(basic_blocks)} basic blocks, {len(edges)} control flow edges{entry_info}")
             except (FileNotFoundError, ValueError, Exception) as e:
                 if tool_name.lower() in self.normalizer.OPTIONAL_TOOLS:
                     # Optional tool failure is acceptable, create empty data
@@ -299,6 +381,7 @@ class MultiCFGComparator:
                     tool_data[tool_name] = {
                         'basic_blocks': set(),
                         'edges': set(),
+                        'entry_point': None,
                         'graph': self._create_graph(set(), set())
                     }
                     print(f"{tool_name}: 0 basic blocks, 0 control flow edges (skipped)")
@@ -415,6 +498,25 @@ class MultiCFGComparator:
             'strongly_connected_components': len(list(nx.strongly_connected_components(graph)))
         }
     
+    def _get_structural_metrics(self, graph: nx.DiGraph) -> Dict:
+        """Get comprehensive structural metrics for a graph"""
+        if graph.number_of_nodes() == 0:
+            return {
+                'nodes': 0, 'edges': 0, 'density': 0, 'avg_degree': 0,
+                'max_degree': 0, 'strongly_connected_components': 0
+            }
+        
+        degrees = [d for n, d in graph.degree()]
+        
+        return {
+            'nodes': graph.number_of_nodes(),
+            'edges': graph.number_of_edges(),
+            'density': nx.density(graph),
+            'avg_degree': sum(degrees) / len(degrees) if degrees else 0,
+            'max_degree': max(degrees) if degrees else 0,
+            'strongly_connected_components': len(list(nx.strongly_connected_components(graph)))
+        }
+    
     def generate_comparison_report(self, comparison: Dict) -> str:
         """Generate detailed comparison report"""
         tool_data = comparison['tool_data']
@@ -457,25 +559,27 @@ class MultiCFGComparator:
         report.append(f"Total unique basic blocks: {len(comparison['all_basic_blocks'])}")
         report.append(f"Basic blocks found by all tools: {len(comparison['common_basic_blocks'])}")
         
-        # Pairwise comparison (only successful tools)
+        # Pairwise comparison (only successful tools) - using structural similarity
         successful_tools = [tool for tool in tool_data.keys() if tool not in failed_tools]
         if len(successful_tools) >= 2:
-            report.append(f"\n3. Pairwise Comparison Analysis (Successful Tools Only)")
+            report.append(f"\n3. Pairwise Structural Similarity Analysis (Successful Tools Only)")
             report.append("-" * 50)
             
             for i, tool1 in enumerate(successful_tools):
                 for j, tool2 in enumerate(successful_tools[i+1:], i+1):
-                    blocks1 = tool_data[tool1]['basic_blocks']
-                    blocks2 = tool_data[tool2]['basic_blocks']
-                    common = len(blocks1 & blocks2)
-                    union = len(blocks1 | blocks2)
-                    jaccard = common / union if union > 0 else 0
+                    graph1 = tool_data[tool1]['graph']
+                    graph2 = tool_data[tool2]['graph']
+                    entry1 = tool_data[tool1]['entry_point']
+                    entry2 = tool_data[tool2]['entry_point']
+                    structural_similarity = self._calculate_pivot_structural_similarity(graph1, graph2, entry1, entry2)
                     
                     report.append(f"{tool1} vs {tool2}:")
-                    report.append(f"  Common basic blocks: {common}")
-                    report.append(f"  Jaccard similarity: {jaccard:.3f}")
+                    if structural_similarity is not None:
+                        report.append(f"  Structural similarity: {structural_similarity:.3f}")
+                    else:
+                        report.append(f"  Structural similarity: N/A (missing entry points)")
         else:
-            report.append(f"\n3. Pairwise Comparison Analysis")
+            report.append(f"\n3. Pairwise Structural Similarity Analysis")
             report.append("-" * 50)
             report.append("⚠️  Less than 2 successful tools, cannot perform meaningful comparison")
         
@@ -601,7 +705,7 @@ class MultiCFGComparator:
                    label, ha='center', va='bottom', fontweight='bold', fontsize=10)
     
     def _create_similarity_heatmap(self, tool_data, failed_tools):
-        """Create similarity heatmap as a separate chart"""
+        """Create similarity heatmap based on graph structure comparison"""
         fig, ax = plt.subplots(1, 1, figsize=(10, 8))
         
         tools = list(tool_data.keys())
@@ -615,11 +719,16 @@ class MultiCFGComparator:
                 elif tool1 in failed_tools or tool2 in failed_tools:
                     similarity_matrix[i][j] = -1
                 else:
-                    blocks1 = tool_data[tool1]['basic_blocks']
-                    blocks2 = tool_data[tool2]['basic_blocks']
-                    common = len(blocks1 & blocks2)
-                    union = len(blocks1 | blocks2)
-                    similarity_matrix[i][j] = common / union if union > 0 else 0
+                    # Use structural similarity with entry point pivot
+                    graph1 = tool_data[tool1]['graph']
+                    graph2 = tool_data[tool2]['graph']
+                    entry1 = tool_data[tool1]['entry_point']
+                    entry2 = tool_data[tool2]['entry_point']
+                    structural_similarity = self._calculate_pivot_structural_similarity(graph1, graph2, entry1, entry2)
+                    if structural_similarity is not None:
+                        similarity_matrix[i][j] = structural_similarity
+                    else:
+                        similarity_matrix[i][j] = -1  # Mark as N/A like failed tools
         
         # Create custom colormap to handle failures and improve high similarity visibility
         import matplotlib.colors as mcolors
@@ -635,7 +744,7 @@ class MultiCFGComparator:
         custom_cmap = mcolors.LinearSegmentedColormap.from_list('light_blues', colors, N=256)
         
         im = ax.imshow(display_matrix, cmap=custom_cmap, aspect='auto', vmin=0, vmax=1)
-        ax.set_title('Basic Block Discovery Jaccard Similarity', fontsize=16, fontweight='bold')
+        ax.set_title('Control Flow Graph Structural Similarity', fontsize=16, fontweight='bold')
         ax.set_xticks(range(n_tools))
         ax.set_yticks(range(n_tools))
         ax.set_xticklabels(tools, rotation=45)
@@ -656,7 +765,7 @@ class MultiCFGComparator:
         
         # Add colorbar with labels
         cbar = plt.colorbar(im, ax=ax)
-        cbar.set_label('Jaccard Similarity', rotation=270, labelpad=20)
+        cbar.set_label('Structural Similarity', rotation=270, labelpad=20)
         
         plt.tight_layout()
         plt.savefig('result/similarity_heatmap.png', dpi=300, bbox_inches='tight')
@@ -693,7 +802,7 @@ class MultiCFGComparator:
         stats_df = pd.DataFrame(stats_data)
         stats_df.to_csv(f"result/{output_prefix}_statistics.csv", index=False, encoding='utf-8')
         
-        # 2. Export Jaccard similarity matrix
+        # 2. Export structural similarity matrix
         tools = list(tool_data.keys())
         similarity_data = []
         
@@ -705,218 +814,191 @@ class MultiCFGComparator:
                 elif tool1 in failed_tools or tool2 in failed_tools:
                     row[tool2] = 'N/A'  # Mark failed tools as N/A
                 else:
-                    blocks1 = tool_data[tool1]['basic_blocks']
-                    blocks2 = tool_data[tool2]['basic_blocks']
-                    common = len(blocks1 & blocks2)
-                    union = len(blocks1 | blocks2)
-                    jaccard = common / union if union > 0 else 0
-                    row[tool2] = round(jaccard, 4)
+                    graph1 = tool_data[tool1]['graph']
+                    graph2 = tool_data[tool2]['graph']
+                    entry1 = tool_data[tool1]['entry_point']
+                    entry2 = tool_data[tool2]['entry_point']
+                    structural_similarity = self._calculate_pivot_structural_similarity(graph1, graph2, entry1, entry2)
+                    if structural_similarity is not None:
+                        row[tool2] = round(structural_similarity, 4)
+                    else:
+                        row[tool2] = 'N/A'
             similarity_data.append(row)
         
         similarity_df = pd.DataFrame(similarity_data)
         similarity_df.to_csv(f"result/{output_prefix}_similarity.csv", index=False, encoding='utf-8')
         
-        # 3. Export basic block comparison (simplified, no level classification)
-        all_basic_blocks = sorted(comparison['all_basic_blocks'])
-        
-        block_data = []
-        
-        for block in all_basic_blocks:
-            row = {'Basic Block': block}
-            for tool in tools:
-                if tool in failed_tools:
-                    row[tool] = 'N/A'  # Mark failed tools as N/A
-                else:
-                    row[tool] = 'Y' if block in tool_data[tool]['basic_blocks'] else 'N'
-            block_data.append(row)
-        
-        block_df = pd.DataFrame(block_data)
-        block_df.to_csv(f"result/{output_prefix}_basic_blocks.csv", index=False, encoding='utf-8')
-        
         print(f"Comparison results exported to:")
         print(f"  - result/{output_prefix}_statistics.csv")
         print(f"  - result/{output_prefix}_similarity.csv")
-        print(f"  - result/{output_prefix}_basic_blocks.csv")
         
         if failed_tools:
             print(f"⚠️  Note: {', '.join(failed_tools)} tool analysis failed, marked as 'N/A' in CSV files")
     
-    def _perform_gcc_coverage_analysis(self, comparison: Dict) -> Dict:
-        """Perform GCC-based coverage analysis - calculate percentage of GCC basic blocks/edges found in other tools"""
-        tool_data = comparison['tool_data']
-        
-        # Check if GCC data exists and is valid
-        if 'GCC' not in tool_data:
-            print("⚠️  Warning: GCC data not found, skipping coverage analysis")
-            return None
-            
-        gcc_data = tool_data['GCC']
-        if len(gcc_data['basic_blocks']) == 0 and len(gcc_data['edges']) == 0:
-            print("⚠️  Warning: GCC data is empty, skipping coverage analysis")
+
+    
+    def _calculate_pivot_structural_similarity(self, graph1: nx.DiGraph, graph2: nx.DiGraph, entry1: str, entry2: str):
+        """Calculate structural similarity using entry points as pivot for alignment"""
+        # If either graph is empty, return None (N/A)
+        if graph1.number_of_nodes() == 0 or graph2.number_of_nodes() == 0:
             return None
         
-        gcc_basic_blocks = gcc_data['basic_blocks']
-        gcc_edges = gcc_data['edges']
-        
-        print(f"\n📊 GCC Coverage Analysis:")
-        print(f"Using GCC as reference standard:")
-        print(f"  - GCC basic blocks: {len(gcc_basic_blocks)}")
-        print(f"  - GCC edges: {len(gcc_edges)}")
-        
-        coverage_results = {}
-        
-        # Analyze each tool's coverage of GCC basic blocks and edges
-        for tool_name, data in tool_data.items():
-            if tool_name == 'GCC':
-                continue  # Skip GCC itself
-                
-            tool_basic_blocks = data['basic_blocks']
-            tool_edges = data['edges']
-            
-            # Calculate basic block coverage
-            if len(gcc_basic_blocks) > 0:
-                common_basic_blocks = gcc_basic_blocks & tool_basic_blocks
-                block_coverage = len(common_basic_blocks) / len(gcc_basic_blocks) * 100
-            else:
-                block_coverage = 0
-                common_basic_blocks = set()
-            
-            # Calculate edge coverage
-            if len(gcc_edges) > 0:
-                common_edges = gcc_edges & tool_edges
-                edge_coverage = len(common_edges) / len(gcc_edges) * 100
-            else:
-                edge_coverage = 0
-                common_edges = set()
-            
-            coverage_results[tool_name] = {
-                'block_coverage': block_coverage,
-                'edge_coverage': edge_coverage,
-                'common_basic_blocks': common_basic_blocks,
-                'common_edges': common_edges,
-                'gcc_blocks_found': len(common_basic_blocks),
-                'gcc_edges_found': len(common_edges),
-                'tool_total_blocks': len(tool_basic_blocks),
-                'tool_total_edges': len(tool_edges)
-            }
-            
-            print(f"  {tool_name}:")
-            print(f"    - Basic block coverage: {block_coverage:.1f}% ({len(common_basic_blocks)}/{len(gcc_basic_blocks)})")
-            print(f"    - Edge coverage: {edge_coverage:.1f}% ({len(common_edges)}/{len(gcc_edges)})")
-        
-        return {
-            'gcc_basic_blocks': gcc_basic_blocks,
-            'gcc_edges': gcc_edges,
-            'coverage_results': coverage_results
-        }
+        # Only use pivot-based comparison if both have valid entry points
+        if entry1 and entry2 and entry1 in graph1.nodes() and entry2 in graph2.nodes():
+            return self._calculate_pivot_based_similarity(graph1, graph2, entry1, entry2)
+        else:
+            # Return None (N/A) if no valid entry points
+            return None
     
-    def _export_gcc_coverage_to_csv(self, coverage_analysis: Dict, output_prefix: str = "gcc_coverage"):
-        """Export GCC coverage analysis to CSV"""
-        if not coverage_analysis:
-            return
-            
-        coverage_results = coverage_analysis['coverage_results']
+    def _calculate_pivot_based_similarity(self, graph1: nx.DiGraph, graph2: nx.DiGraph, entry1: str, entry2: str) -> float:
+        """Calculate similarity using entry points as alignment pivots"""
+        similarities = []
         
-        # 1. Export coverage statistics
-        stats_data = []
-        for tool_name, results in coverage_results.items():
-            stats_data.append({
-                'Tool': tool_name,
-                'GCC Basic Blocks Found': results['gcc_blocks_found'],
-                'Total GCC Basic Blocks': len(coverage_analysis['gcc_basic_blocks']),
-                'Block Coverage (%)': round(results['block_coverage'], 2),
-                'GCC Edges Found': results['gcc_edges_found'],
-                'Total GCC Edges': len(coverage_analysis['gcc_edges']),
-                'Edge Coverage (%)': round(results['edge_coverage'], 2),
-                'Tool Total Basic Blocks': results['tool_total_blocks'],
-                'Tool Total Edges': results['tool_total_edges']
-            })
+        # 1. Basic graph metrics similarity (same as before)
+        metrics1 = self._get_structural_metrics(graph1)
+        metrics2 = self._get_structural_metrics(graph2)
         
-        stats_df = pd.DataFrame(stats_data)
-        stats_df.to_csv(f"result/{output_prefix}_statistics.csv", index=False, encoding='utf-8')
+        max_nodes = max(metrics1['nodes'], metrics2['nodes'])
+        min_nodes = min(metrics1['nodes'], metrics2['nodes'])
+        node_similarity = min_nodes / max_nodes if max_nodes > 0 else 0
+        similarities.append(node_similarity)
         
-        # 2. Export detailed basic block coverage
-        gcc_basic_blocks = sorted(coverage_analysis['gcc_basic_blocks'])
-        block_coverage_data = []
+        max_edges = max(metrics1['edges'], metrics2['edges'])
+        min_edges = min(metrics1['edges'], metrics2['edges'])
+        edge_similarity = min_edges / max_edges if max_edges > 0 else 0
+        similarities.append(edge_similarity)
         
-        for block in gcc_basic_blocks:
-            row = {'Basic Block': block, 'In GCC': 'Y'}
-            for tool_name, results in coverage_results.items():
-                row[tool_name] = 'Y' if block in results['common_basic_blocks'] else 'N'
-            block_coverage_data.append(row)
+        # 2. Entry point neighborhood comparison (high weight)
+        entry_similarity = self._compare_entry_neighborhoods(graph1, graph2, entry1, entry2)
+        similarities.append(entry_similarity)
         
-        block_coverage_df = pd.DataFrame(block_coverage_data)
-        block_coverage_df.to_csv(f"result/{output_prefix}_basic_blocks.csv", index=False, encoding='utf-8')
+        # 3. Path structure similarity from entry points
+        path_similarity = self._compare_path_structures(graph1, graph2, entry1, entry2)
+        similarities.append(path_similarity)
         
-        # 3. Export detailed edge coverage
-        gcc_edges = sorted(coverage_analysis['gcc_edges'])
-        edge_coverage_data = []
+        # 4. Branch pattern similarity from entry points
+        branch_similarity = self._compare_branch_patterns(graph1, graph2, entry1, entry2)
+        similarities.append(branch_similarity)
         
-        for source, target in gcc_edges:
-            row = {'Source': source, 'Target': target, 'In GCC': 'Y'}
-            for tool_name, results in coverage_results.items():
-                row[tool_name] = 'Y' if (source, target) in results['common_edges'] else 'N'
-            edge_coverage_data.append(row)
+        # 5. Overall connectivity pattern
+        density_diff = abs(metrics1['density'] - metrics2['density'])
+        density_similarity = 1.0 - min(density_diff, 1.0)
+        similarities.append(density_similarity)
         
-        edge_coverage_df = pd.DataFrame(edge_coverage_data)
-        edge_coverage_df.to_csv(f"result/{output_prefix}_edges.csv", index=False, encoding='utf-8')
+        # Weighted average with higher weights for pivot-based metrics
+        weights = [0.10, 0.10, 0.35, 0.25, 0.15, 0.05]  # Entry neighborhood and path structure get highest weights
+        weighted_similarity = sum(s * w for s, w in zip(similarities, weights))
         
-        print(f"\nGCC coverage analysis exported to:")
-        print(f"  - result/{output_prefix}_statistics.csv (coverage statistics)")
-        print(f"  - result/{output_prefix}_basic_blocks.csv (basic block-level coverage)")
-        print(f"  - result/{output_prefix}_edges.csv (edge-level coverage)")
+        return weighted_similarity
     
-    def _create_gcc_coverage_chart(self, coverage_analysis: Dict, output_prefix: str = "gcc_coverage"):
-        """Create GCC coverage comparison chart"""
-        if not coverage_analysis:
-            return
-            
-        coverage_results = coverage_analysis['coverage_results']
-        tools = list(coverage_results.keys())
+    def _compare_entry_neighborhoods(self, graph1: nx.DiGraph, graph2: nx.DiGraph, entry1: str, entry2: str) -> float:
+        """Compare the immediate neighborhoods of entry points"""
+        # Get immediate successors and predecessors
+        successors1 = set(graph1.successors(entry1))
+        successors2 = set(graph2.successors(entry2))
+        predecessors1 = set(graph1.predecessors(entry1))
+        predecessors2 = set(graph2.predecessors(entry2))
         
-        # Prepare data for visualization
-        block_coverages = [coverage_results[tool]['block_coverage'] for tool in tools]
-        edge_coverages = [coverage_results[tool]['edge_coverage'] for tool in tools]
+        # Compare out-degree similarity
+        out_degree1 = len(successors1)
+        out_degree2 = len(successors2)
+        max_out = max(out_degree1, out_degree2)
+        min_out = min(out_degree1, out_degree2)
+        out_degree_sim = min_out / max_out if max_out > 0 else 1.0
         
-        # Create chart
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        # Compare in-degree similarity (entry points often have 0 predecessors)
+        in_degree1 = len(predecessors1)
+        in_degree2 = len(predecessors2)
+        max_in = max(in_degree1, in_degree2)
+        min_in = min(in_degree1, in_degree2)
+        in_degree_sim = min_in / max_in if max_in > 0 else 1.0
         
-        # Colors for different tools (excluding GCC since it's the reference)
-        colors = ['#ff7f0e', '#9467bd', '#2ca02c', '#d62728', '#17becf']
-        bar_colors = [colors[i % len(colors)] for i in range(len(tools))]
+        # Compare 2-hop neighborhoods
+        two_hop1 = set()
+        for succ in successors1:
+            two_hop1.update(graph1.successors(succ))
         
-        # Basic block coverage chart
-        bars1 = ax1.bar(tools, block_coverages, color=bar_colors)
-        ax1.set_title('Basic Block Coverage vs GCC Reference', fontsize=14, fontweight='bold')
-        ax1.set_ylabel('Coverage Percentage (%)')
-        ax1.set_xlabel('Analysis Tools')
-        ax1.set_ylim(0, 100)
+        two_hop2 = set()
+        for succ in successors2:
+            two_hop2.update(graph2.successors(succ))
         
-        # Add percentage labels on bars
-        for bar, coverage in zip(bars1, block_coverages):
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2, height + 1,
-                    f'{coverage:.1f}%', ha='center', va='bottom', fontweight='bold')
+        two_hop_size1 = len(two_hop1)
+        two_hop_size2 = len(two_hop2)
+        max_two_hop = max(two_hop_size1, two_hop_size2)
+        min_two_hop = min(two_hop_size1, two_hop_size2)
+        two_hop_sim = min_two_hop / max_two_hop if max_two_hop > 0 else 1.0
         
-        # Edge coverage chart
-        bars2 = ax2.bar(tools, edge_coverages, color=bar_colors)
-        ax2.set_title('Control Flow Edge Coverage vs GCC Reference', fontsize=14, fontweight='bold')
-        ax2.set_ylabel('Coverage Percentage (%)')
-        ax2.set_xlabel('Analysis Tools')
-        ax2.set_ylim(0, 100)
+        # Weighted combination
+        return 0.4 * out_degree_sim + 0.2 * in_degree_sim + 0.4 * two_hop_sim
+    
+    def _compare_path_structures(self, graph1: nx.DiGraph, graph2: nx.DiGraph, entry1: str, entry2: str) -> float:
+        """Compare path structures starting from entry points"""
+        # Get path lengths from entry to all reachable nodes
+        try:
+            paths1 = nx.single_source_shortest_path_length(graph1, entry1, cutoff=5)
+            paths2 = nx.single_source_shortest_path_length(graph2, entry2, cutoff=5)
+        except nx.NetworkXError:
+            return 0.0
         
-        # Add percentage labels on bars
-        for bar, coverage in zip(bars2, edge_coverages):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2, height + 1,
-                    f'{coverage:.1f}%', ha='center', va='bottom', fontweight='bold')
+        # Create distance histograms
+        max_dist = max(max(paths1.values()) if paths1 else 0, max(paths2.values()) if paths2 else 0)
+        if max_dist == 0:
+            return 1.0
         
-        # Rotate x-axis labels if needed
-        ax1.tick_params(axis='x', rotation=45)
-        ax2.tick_params(axis='x', rotation=45)
+        hist1 = [0] * (max_dist + 1)
+        hist2 = [0] * (max_dist + 1)
         
-        plt.tight_layout()
-        plt.savefig(f'result/{output_prefix}_comparison.png', dpi=300, bbox_inches='tight')
-        print(f"GCC coverage comparison chart saved as result/{output_prefix}_comparison.png")
+        for dist in paths1.values():
+            hist1[dist] += 1
+        for dist in paths2.values():
+            hist2[dist] += 1
+        
+        # Normalize
+        total1 = sum(hist1)
+        total2 = sum(hist2)
+        if total1 > 0:
+            hist1 = [h / total1 for h in hist1]
+        if total2 > 0:
+            hist2 = [h / total2 for h in hist2]
+        
+        # Calculate intersection over union
+        intersection = sum(min(h1, h2) for h1, h2 in zip(hist1, hist2))
+        union = sum(max(h1, h2) for h1, h2 in zip(hist1, hist2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _compare_branch_patterns(self, graph1: nx.DiGraph, graph2: nx.DiGraph, entry1: str, entry2: str) -> float:
+        """Compare branching patterns from entry points"""
+        # Find all branching nodes (out-degree > 1) reachable from entry
+        try:
+            reachable1 = set(nx.descendants(graph1, entry1)) | {entry1}
+            reachable2 = set(nx.descendants(graph2, entry2)) | {entry2}
+        except nx.NetworkXError:
+            return 0.0
+        
+        branch_nodes1 = [node for node in reachable1 if graph1.out_degree(node) > 1]
+        branch_nodes2 = [node for node in reachable2 if graph2.out_degree(node) > 1]
+        
+        # Compare number of branching nodes
+        max_branches = max(len(branch_nodes1), len(branch_nodes2))
+        min_branches = min(len(branch_nodes1), len(branch_nodes2))
+        branch_count_sim = min_branches / max_branches if max_branches > 0 else 1.0
+        
+        # Compare branching degrees
+        branch_degrees1 = [graph1.out_degree(node) for node in branch_nodes1]
+        branch_degrees2 = [graph2.out_degree(node) for node in branch_nodes2]
+        
+        if not branch_degrees1 and not branch_degrees2:
+            degree_sim = 1.0
+        elif not branch_degrees1 or not branch_degrees2:
+            degree_sim = 0.0
+        else:
+            avg_degree1 = sum(branch_degrees1) / len(branch_degrees1)
+            avg_degree2 = sum(branch_degrees2) / len(branch_degrees2)
+            max_avg = max(avg_degree1, avg_degree2)
+            min_avg = min(avg_degree1, avg_degree2)
+            degree_sim = min_avg / max_avg if max_avg > 0 else 1.0
+        
+        return 0.6 * branch_count_sim + 0.4 * degree_sim
 
 

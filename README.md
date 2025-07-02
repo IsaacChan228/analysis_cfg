@@ -40,7 +40,24 @@ The framework performs comprehensive graph-theoretic analysis using NetworkX:
 - **Graph Density**: Measures connectivity (edges / possible_edges)
 - **Degree Analysis**: In-degree and out-degree statistics for control flow
 - **Connected Components**: Strongly connected component identification
-- **Jaccard Similarity**: Pairwise tool comparison using intersection/union ratios
+- **Structural Similarity**: Multi-dimensional comparison of graph topology including:
+  - Node and edge count similarity
+  - Graph density patterns
+  - Degree distribution analysis
+  - Strongly connected component structure
+
+### Entry Point Detection (Main Function)
+For each tool, the framework automatically detects the main function entry point as the pivot for all structural comparisons:
+- **GCC**: Prefers a node labeled `ENTRY` (e.g., `fn_xxx_basic_block_xxx`), or the first basic block in the `cluster_main` subgraph.
+- **Ghidra**: Prefers a node with `Symbols="main"`, or the first node in the graph.
+- **Angr / Radare2**: Prefers a node whose label contains `main` (case-insensitive), or the first node with an address like `0x4xxxxx`, or the first node in the graph.
+- If no entry point is found, the tool's similarity results will be marked as `N/A`.
+
+### Structural Similarity Methodology
+- **Entry-point pivoted**: All pairwise comparisons are strictly based on the structure reachable from the detected entry point (main function) in each tool's CFG.
+- **No name-based or Jaccard block/edge comparison**: All name-based logic and outputs have been removed. Only structure/topology is compared.
+- **Multi-metric, weighted scoring**: Combines node/edge count, entry neighborhood, path structure, branch patterns, and density, with highest weights on entry neighborhood and path structure.
+- **N/A handling**: If either tool lacks a valid entry point, the similarity is reported as `N/A` in all outputs (CSV, report, heatmap).
 
 ## Technical Implementation
 
@@ -109,13 +126,11 @@ The framework generates multiple high-resolution PNG charts:
 - **Basic Block Discovery Comparison**: Bar charts showing total basic block counts
 - **Control Flow Comparison**: Analysis of control flow edge quantities across tools
 - **Graph Density Comparison**: Visualization of graph connectivity metrics
-- **Similarity Heatmap**: Color-coded Jaccard similarity matrix between all tool pairs
+- **Structural Similarity Heatmap**: Color-coded structural similarity matrix based on graph topology
 
 ### Data Exports (CSV Format)
-- **Statistics Summary**: Comprehensive metrics for each tool
-- **Similarity Matrix**: Pairwise comparison coefficients
-- **Basic Block Comparison**: Detailed block-by-block analysis
-- **Control Flow Analysis**: Inter-block relationship mapping
+- **Statistics Summary**: Comprehensive metrics for each tool including graph density, degree analysis, and connectivity
+- **Structural Similarity Matrix**: Pairwise structural similarity coefficients based on graph topology
 
 ### Logging and Reporting
 - **Complete Analysis Log**: Detailed execution log with all intermediate results
@@ -128,13 +143,12 @@ The framework generates multiple high-resolution PNG charts:
 - `result/basic_block_discovery_comparison.png` - Basic block discovery analysis across tools
 - `result/control_flow_comparison.png` - Control flow comparison charts
 - `result/graph_density_comparison.png` - Graph density and connectivity metrics
-- `result/similarity_heatmap.png` - Jaccard similarity matrix heatmap
+- `result/similarity_heatmap.png` - Structural similarity matrix heatmap
 
 ### Data Export Files (CSV)
 - `result/multi_cfg_comparison_statistics.csv` - Comprehensive tool statistics
-- `result/multi_cfg_comparison_similarity.csv` - Pairwise similarity matrix
-- `result/multi_cfg_comparison_basic_blocks.csv` - Basic block-level comparison
-- `result/multi_cfg_comparison_edges.csv` - Control flow edges analysis
+- `result/multi_cfg_comparison_similarity.csv` - Structural similarity matrix
 
 ### Log Files
 - `analysis_log.txt` - Complete execution log with detailed analysis results
+

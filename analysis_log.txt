@@ -1,32 +1,27 @@
 Starting analysis of all control flow graphs...
 Standardizing Radare2 control flow graph...
-Radare2: 96 basic blocks, 157 control flow edges
+Radare2: 96 basic blocks, 157 control flow edges (entry: 0x0002f040)
 Standardizing Ghidra control flow graph...
-Ghidra: 130 basic blocks, 205 control flow edges
+Ghidra: 130 basic blocks, 205 control flow edges (entry: 0012f040)
 Standardizing Angr_Fast control flow graph...
-Angr_Fast: 146 basic blocks, 209 control flow edges
+Angr_Fast: 146 basic blocks, 209 control flow edges (entry: 0x42f040)
 Standardizing Angr_Emul control flow graph...
-Angr_Emul: 93 basic blocks, 121 control flow edges
+Angr_Emul: 93 basic blocks, 121 control flow edges (entry: 0x42f040)
 Standardizing GCC control flow graph...
-⚠️  Warning: GCC analysis failed or found no basic blocks and control flow edges - Will continue with other tools
-    This may be due to:
-    - GCC CFG generation failure
-    - Missing compilation flags or debug information
-    - Incorrect file format
-    - Binary file too complex
-GCC: 0 basic blocks, 0 control flow edges
-✅ Successfully analyzed 4 tools: Radare2, Ghidra, Angr_Fast, Angr_Emul
+GCC: 73 basic blocks, 106 control flow edges (entry: bb_0)
+✅ Successfully analyzed 5 tools: Radare2, Ghidra, Angr_Fast, Angr_Emul, GCC
 
 🔍 Aggregating data from all tools:
   + Radare2: Added 96 unique basic blocks, 157 unique edges
   + Ghidra: Added 130 unique basic blocks, 205 unique edges
   + Angr_Fast: Added 146 unique basic blocks, 209 unique edges
   + Angr_Emul: Added 0 unique basic blocks, 5 unique edges
-📊 Total unique basic blocks: 372
-📊 Total unique edges: 576
+  + GCC: Added 73 unique basic blocks, 106 unique edges
+📊 Total unique basic blocks: 445
+📊 Total unique edges: 682
 
 🔍 Finding common elements across tools:
-  - Radare2: Filtered out 276 basic blocks, 419 edges not in common
+  - Radare2: Filtered out 349 basic blocks, 525 edges not in common
   - Ghidra: Filtered out 96 basic blocks, 157 edges not in common
 📊 Common basic blocks: 0
 📊 Common edges: 0
@@ -48,43 +43,39 @@ Radare2         96              157             0.0172          ✓ Success
 Ghidra          130             205             0.0096          ✓ Success 
 Angr_Fast       146             209             0.0099          ✓ Success 
 Angr_Emul       93              121             0.0141          ✓ Success 
-GCC             0               0               0.0000          ✗ Failed  
-
-⚠️  Failed analysis tools: GCC
-   These tools may have failed due to:
-   - Tool execution failure or timeout
-   - Unsupported binary file format
-   - Configuration or environment issues
+GCC             73              106             0.0202          ✓ Success 
 
 2. Basic Block Discovery Analysis
 --------------------------------------------------
-Total unique basic blocks: 372
+Total unique basic blocks: 445
 Basic blocks found by all tools: 0
 
-3. Pairwise Comparison Analysis (Successful Tools Only)
+3. Pairwise Structural Similarity Analysis (Successful Tools Only)
 --------------------------------------------------
 Radare2 vs Ghidra:
-  Common basic blocks: 0
-  Jaccard similarity: 0.000
+  Structural similarity: 0.723
 Radare2 vs Angr_Fast:
-  Common basic blocks: 0
-  Jaccard similarity: 0.000
+  Structural similarity: 0.716
 Radare2 vs Angr_Emul:
-  Common basic blocks: 0
-  Jaccard similarity: 0.000
+  Structural similarity: 0.715
+Radare2 vs GCC:
+  Structural similarity: 0.610
 Ghidra vs Angr_Fast:
-  Common basic blocks: 0
-  Jaccard similarity: 0.000
+  Structural similarity: 0.992
 Ghidra vs Angr_Emul:
-  Common basic blocks: 0
-  Jaccard similarity: 0.000
+  Structural similarity: 0.882
+Ghidra vs GCC:
+  Structural similarity: 0.706
 Angr_Fast vs Angr_Emul:
-  Common basic blocks: 93
-  Jaccard similarity: 0.637
+  Structural similarity: 0.878
+Angr_Fast vs GCC:
+  Structural similarity: 0.703
+Angr_Emul vs GCC:
+  Structural similarity: 0.793
 
 4. Control Flow Analysis
 --------------------------------------------------
-Total unique control flow edges: 576
+Total unique control flow edges: 682
 Control flow edges found by all tools: 0
 
 5. Tool Characteristic Analysis (Successful Tools Only)
@@ -132,6 +123,19 @@ Angr_Fast unique basic blocks (53 total):
 Angr_Emul unique basic blocks (0 total):
   (No unique basic blocks)
 
+GCC unique basic blocks (73 total):
+  - bb_0
+  - bb_1
+  - bb_10
+  - bb_11
+  - bb_12
+  - bb_13
+  - bb_14
+  - bb_15
+  - bb_16
+  - bb_17
+  ... and 63 more
+
 Generating visualization charts...
 Basic block discovery comparison chart saved as result/basic_block_discovery_comparison.png
 Control flow comparison chart saved as result/control_flow_comparison.png
@@ -140,18 +144,11 @@ Similarity heatmap saved as result/similarity_heatmap.png
 Comparison results exported to:
   - result/multi_cfg_comparison_statistics.csv
   - result/multi_cfg_comparison_similarity.csv
-  - result/multi_cfg_comparison_basic_blocks.csv
-⚠️  Note: GCC tool analysis failed, marked as 'N/A' in CSV files
 
 Exporting comparison results to CSV files...
 Comparison results exported to:
   - result/multi_cfg_comparison_statistics.csv
   - result/multi_cfg_comparison_similarity.csv
-  - result/multi_cfg_comparison_basic_blocks.csv
-⚠️  Note: GCC tool analysis failed, marked as 'N/A' in CSV files
-
-Performing GCC coverage analysis...
-⚠️  Warning: GCC data is empty, skipping coverage analysis
 
 ✅ Analysis complete!
 📁 Output files:
@@ -159,7 +156,5 @@ Performing GCC coverage analysis...
   - result/basic_block_discovery_comparison.png (basic block discovery comparison)
   - result/control_flow_comparison.png (control flow comparison)
   - result/graph_density_comparison.png (graph density comparison)
-  - result/similarity_heatmap.png (similarity heatmap)
-  - result/gcc_coverage_analysis_comparison.png (GCC coverage analysis)
-  - result/multi_cfg_comparison_*.csv (basic comparison data)
-  - result/gcc_coverage_analysis_*.csv (GCC coverage analysis data)
+  - result/similarity_heatmap.png (structural similarity heatmap)
+  - result/multi_cfg_comparison_*.csv (structural comparison data)
