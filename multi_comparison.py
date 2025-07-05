@@ -828,9 +828,68 @@ class MultiCFGComparator:
         similarity_df = pd.DataFrame(similarity_data)
         similarity_df.to_csv(f"result/{output_prefix}_similarity.csv", index=False, encoding='utf-8')
         
+        # 3. Export Entry Point Neighborhood Similarity matrix
+        entry_neighborhood_matrix_data = []
+        tools = list(tool_data.keys())
+        
+        for tool1 in tools:
+            row = {'Tool': tool1}
+            for tool2 in tools:
+                if tool1 == tool2:
+                    row[tool2] = 1.0
+                elif tool1 in failed_tools or tool2 in failed_tools:
+                    row[tool2] = 'N/A'
+                else:
+                    graph1 = tool_data[tool1]['graph']
+                    graph2 = tool_data[tool2]['graph']
+                    entry1 = tool_data[tool1]['entry_point']
+                    entry2 = tool_data[tool2]['entry_point']
+                    
+                    # Check if both graphs have valid entry points
+                    if (entry1 and entry2 and entry1 in graph1.nodes() and entry2 in graph2.nodes() and 
+                        graph1.number_of_nodes() > 0 and graph2.number_of_nodes() > 0):
+                        entry_similarity = self._compare_entry_neighborhoods(graph1, graph2, entry1, entry2)
+                        row[tool2] = round(entry_similarity, 4)
+                    else:
+                        row[tool2] = 'N/A'
+            entry_neighborhood_matrix_data.append(row)
+        
+        entry_neighborhood_df = pd.DataFrame(entry_neighborhood_matrix_data)
+        entry_neighborhood_df.to_csv(f"result/{output_prefix}_entry_neighborhood_similarity.csv", index=False, encoding='utf-8')
+        
+        # 4. Export Path Structure Similarity matrix
+        path_structure_matrix_data = []
+        
+        for tool1 in tools:
+            row = {'Tool': tool1}
+            for tool2 in tools:
+                if tool1 == tool2:
+                    row[tool2] = 1.0
+                elif tool1 in failed_tools or tool2 in failed_tools:
+                    row[tool2] = 'N/A'
+                else:
+                    graph1 = tool_data[tool1]['graph']
+                    graph2 = tool_data[tool2]['graph']
+                    entry1 = tool_data[tool1]['entry_point']
+                    entry2 = tool_data[tool2]['entry_point']
+                    
+                    # Check if both graphs have valid entry points
+                    if (entry1 and entry2 and entry1 in graph1.nodes() and entry2 in graph2.nodes() and 
+                        graph1.number_of_nodes() > 0 and graph2.number_of_nodes() > 0):
+                        path_similarity = self._compare_path_structures(graph1, graph2, entry1, entry2)
+                        row[tool2] = round(path_similarity, 4)
+                    else:
+                        row[tool2] = 'N/A'
+            path_structure_matrix_data.append(row)
+        
+        path_structure_df = pd.DataFrame(path_structure_matrix_data)
+        path_structure_df.to_csv(f"result/{output_prefix}_path_structure_similarity.csv", index=False, encoding='utf-8')
+        
         print(f"Comparison results exported to:")
         print(f"  - result/{output_prefix}_statistics.csv")
         print(f"  - result/{output_prefix}_similarity.csv")
+        print(f"  - result/{output_prefix}_entry_neighborhood_similarity.csv")
+        print(f"  - result/{output_prefix}_path_structure_similarity.csv")
         
         if failed_tools:
             print(f"⚠️  Note: {', '.join(failed_tools)} tool analysis failed, marked as 'N/A' in CSV files")

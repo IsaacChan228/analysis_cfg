@@ -144,11 +144,15 @@ Similarity heatmap saved as result/similarity_heatmap.png
 Comparison results exported to:
   - result/multi_cfg_comparison_statistics.csv
   - result/multi_cfg_comparison_similarity.csv
+  - result/multi_cfg_comparison_entry_neighborhood_similarity.csv
+  - result/multi_cfg_comparison_path_structure_similarity.csv
 
 Exporting comparison results to CSV files...
 Comparison results exported to:
   - result/multi_cfg_comparison_statistics.csv
   - result/multi_cfg_comparison_similarity.csv
+  - result/multi_cfg_comparison_entry_neighborhood_similarity.csv
+  - result/multi_cfg_comparison_path_structure_similarity.csv
 
 ✅ Analysis complete!
 📁 Output files:
