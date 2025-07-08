@@ -2,13 +2,13 @@ Starting analysis of all control flow graphs...
 Standardizing Radare2 control flow graph...
 Radare2: 96 basic blocks, 157 control flow edges (entry: 0x0002f040)
 Standardizing Ghidra control flow graph...
-Ghidra: 130 basic blocks, 205 control flow edges (entry: 0012f040)
+Ghidra: 130 basic blocks, 205 control flow edges (entry: 0x0012f040)
 Standardizing Angr_Fast control flow graph...
 Angr_Fast: 146 basic blocks, 209 control flow edges (entry: 0x42f040)
 Standardizing Angr_Emul control flow graph...
 Angr_Emul: 93 basic blocks, 121 control flow edges (entry: 0x42f040)
 Standardizing GCC control flow graph...
-GCC: 73 basic blocks, 106 control flow edges (entry: bb_0)
+GCC: 449 basic blocks, 652 control flow edges (entry: fn_71_bb_0)
 ✅ Successfully analyzed 5 tools: Radare2, Ghidra, Angr_Fast, Angr_Emul, GCC
 
 🔍 Aggregating data from all tools:
@@ -16,12 +16,12 @@ GCC: 73 basic blocks, 106 control flow edges (entry: bb_0)
   + Ghidra: Added 130 unique basic blocks, 205 unique edges
   + Angr_Fast: Added 146 unique basic blocks, 209 unique edges
   + Angr_Emul: Added 0 unique basic blocks, 5 unique edges
-  + GCC: Added 73 unique basic blocks, 106 unique edges
-📊 Total unique basic blocks: 445
-📊 Total unique edges: 682
+  + GCC: Added 449 unique basic blocks, 652 unique edges
+📊 Total unique basic blocks: 821
+📊 Total unique edges: 1228
 
 🔍 Finding common elements across tools:
-  - Radare2: Filtered out 349 basic blocks, 525 edges not in common
+  - Radare2: Filtered out 725 basic blocks, 1071 edges not in common
   - Ghidra: Filtered out 96 basic blocks, 157 edges not in common
 📊 Common basic blocks: 0
 📊 Common edges: 0
@@ -43,11 +43,11 @@ Radare2         96              157             0.0172          ✓ Success
 Ghidra          130             205             0.0096          ✓ Success 
 Angr_Fast       146             209             0.0099          ✓ Success 
 Angr_Emul       93              121             0.0141          ✓ Success 
-GCC             73              106             0.0202          ✓ Success 
+GCC             449             652             0.0032          ✓ Success 
 
 2. Basic Block Discovery Analysis
 --------------------------------------------------
-Total unique basic blocks: 445
+Total unique basic blocks: 821
 Basic blocks found by all tools: 0
 
 3. Pairwise Structural Similarity Analysis (Successful Tools Only)
@@ -59,23 +59,23 @@ Radare2 vs Angr_Fast:
 Radare2 vs Angr_Emul:
   Structural similarity: 0.715
 Radare2 vs GCC:
-  Structural similarity: 0.610
+  Structural similarity: 0.540
 Ghidra vs Angr_Fast:
   Structural similarity: 0.992
 Ghidra vs Angr_Emul:
   Structural similarity: 0.882
 Ghidra vs GCC:
-  Structural similarity: 0.706
+  Structural similarity: 0.599
 Angr_Fast vs Angr_Emul:
   Structural similarity: 0.878
 Angr_Fast vs GCC:
-  Structural similarity: 0.703
+  Structural similarity: 0.599
 Angr_Emul vs GCC:
-  Structural similarity: 0.793
+  Structural similarity: 0.587
 
 4. Control Flow Analysis
 --------------------------------------------------
-Total unique control flow edges: 682
+Total unique control flow edges: 1228
 Control flow edges found by all tools: 0
 
 5. Tool Characteristic Analysis (Successful Tools Only)
@@ -95,16 +95,16 @@ Radare2 unique basic blocks (96 total):
   ... and 86 more
 
 Ghidra unique basic blocks (130 total):
-  - 0012f09f
-  - 0012f0ae
-  - 0012f0bd
-  - 0012f0d1
-  - 0012f0dd
-  - 0012f0ec
-  - 0012f130
-  - 0012f147
-  - 0012f150
-  - 0012f158
+  - 0x0012f09f
+  - 0x0012f0ae
+  - 0x0012f0bd
+  - 0x0012f0d1
+  - 0x0012f0dd
+  - 0x0012f0ec
+  - 0x0012f130
+  - 0x0012f147
+  - 0x0012f150
+  - 0x0012f158
   ... and 120 more
 
 Angr_Fast unique basic blocks (53 total):
@@ -123,18 +123,18 @@ Angr_Fast unique basic blocks (53 total):
 Angr_Emul unique basic blocks (0 total):
   (No unique basic blocks)
 
-GCC unique basic blocks (73 total):
-  - bb_0
-  - bb_1
-  - bb_10
-  - bb_11
-  - bb_12
-  - bb_13
-  - bb_14
-  - bb_15
-  - bb_16
-  - bb_17
-  ... and 63 more
+GCC unique basic blocks (449 total):
+  - fn_71_bb_0
+  - fn_71_bb_1
+  - fn_71_bb_10
+  - fn_71_bb_11
+  - fn_71_bb_2
+  - fn_71_bb_3
+  - fn_71_bb_4
+  - fn_71_bb_5
+  - fn_71_bb_6
+  - fn_71_bb_7
+  ... and 439 more
 
 Generating visualization charts...
 Basic block discovery comparison chart saved as result/basic_block_discovery_comparison.png

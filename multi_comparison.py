@@ -42,15 +42,22 @@ class CFGNormalizer:
         # Remove various prefixes for addresses and labels
         name = re.sub(r'^(dbg\.|sym\.|fcn\.|reloc\.|imp\.|unk\.)', '', name)
         
-        # Handle GCC basic block format (bb_N)
+        # Handle GCC basic block format (bb_N or fn_X_bb_Y)
         if name.startswith('bb_') and name[3:].isdigit():
             return name  # Keep GCC format as-is
+        if re.match(r'^fn_\d+_bb_\d+$', name):
+            return name  # Keep GCC function-specific format as-is
         
         # For CFG, we typically work with addresses as basic block identifiers
         # Keep address format but normalize it
         if re.match(r'^0x[0-9a-f]+$', name, re.IGNORECASE):
             # Normalize address format - ensure lowercase and consistent format
             return name.lower()
+        
+        # Handle Ghidra-style addresses without 0x prefix (e.g., "00165520")
+        if re.match(r'^[0-9a-f]{6,}$', name, re.IGNORECASE):
+            # Normalize to lowercase and add 0x prefix for consistency
+            return f"0x{name.lower()}"
         
         # Remove address suffixes and labels for non-address blocks
         name = re.sub(r'\.0x[0-9a-f]+$', '', name)
@@ -119,6 +126,10 @@ class CFGNormalizer:
         
         if tool_name.lower() == 'ghidra':
             basic_blocks, edges = self._extract_from_ghidra_gf(content)
+        elif tool_name.lower() == 'gcc':
+            basic_blocks, edges = self._extract_from_gcc_dot(content)
+        elif tool_name.lower() in ['radare2', 'r2']:
+            basic_blocks, edges = self._extract_from_r2_dot(content)
         else:
             basic_blocks, edges = self._extract_from_standard_dot(content)
         
@@ -172,30 +183,25 @@ class CFGNormalizer:
                 basic_blocks.add(normalized)
         
         # If no labeled nodes found, try to extract node names directly
+        # But exclude matches that are clearly string literals inside labels
         if not basic_blocks:
             simple_node_pattern = r'"([^"]+)"\s*\['
             for match in re.finditer(simple_node_pattern, content):
                 block_name = match.group(1)
+                
+                # Skip if this looks like a string literal inside a label (followed by [0] or similar)
+                # Check the character after the match to see if it's a digit (indicating array access)
+                match_end = match.end() - 1  # Position of '['
+                if match_end + 1 < len(content) and content[match_end + 1].isdigit():
+                    continue  # Skip string literals like "?"[0]
+                
+                # Skip very short or strange-looking names that are likely not node names
+                if len(block_name) < 2 or block_name.count('?') > 0 or block_name.count('\\') > 1:
+                    continue
+                
                 normalized = self.normalize_block_name(block_name)
                 if normalized:
                     basic_blocks.add(normalized)
-        
-        # GCC format: unquoted node names with specific patterns
-        if not basic_blocks:
-            gcc_node_pattern = r'(\w+)\s*\[.*?label="([^"]*)'
-            for match in re.finditer(gcc_node_pattern, content):
-                node_id = match.group(1)
-                block_label = match.group(2) if match.group(2) else node_id
-                
-                # GCC uses patterns like fn_72_basic_block_68
-                if 'basic_block' in node_id:
-                    # Extract the basic block number/identifier
-                    bb_match = re.search(r'basic_block_(\d+)', node_id)
-                    if bb_match:
-                        bb_num = bb_match.group(1)
-                        normalized = self.normalize_block_name(f"bb_{bb_num}")
-                        if normalized:
-                            basic_blocks.add(normalized)
         
         # Extract edges (control flow relationships)
         # Standard DOT format with quoted names
@@ -210,25 +216,6 @@ class CFGNormalizer:
             
             if source_normalized and target_normalized:
                 edges.add((source_normalized, target_normalized))
-        
-        # GCC format: unquoted names with port specifications (e.g., fn_72_basic_block_0:s -> fn_72_basic_block_2:n)
-        gcc_edge_pattern = r'(\w+)(?::\w+)?\s*->\s*(\w+)(?::\w+)?'
-        for match in re.finditer(gcc_edge_pattern, content):
-            source = match.group(1)
-            target = match.group(2)
-            
-            # Only process if they look like GCC basic block identifiers
-            if 'basic_block' in source and 'basic_block' in target:
-                # Extract basic block numbers
-                source_bb = re.search(r'basic_block_(\d+)', source)
-                target_bb = re.search(r'basic_block_(\d+)', target)
-                
-                if source_bb and target_bb:
-                    source_normalized = self.normalize_block_name(f"bb_{source_bb.group(1)}")
-                    target_normalized = self.normalize_block_name(f"bb_{target_bb.group(1)}")
-                    
-                    if source_normalized and target_normalized:
-                        edges.add((source_normalized, target_normalized))
         
         return basic_blocks, edges
     
@@ -252,6 +239,108 @@ class CFGNormalizer:
         edge_pattern = r'"([^"]+)"\s*->\s*"([^"]+)"'
         
         # Extract control flow relationships
+        for match in re.finditer(edge_pattern, content):
+            source_addr = match.group(1)
+            target_addr = match.group(2)
+            
+            source_normalized = self.normalize_block_name(source_addr)
+            target_normalized = self.normalize_block_name(target_addr)
+            
+            if source_normalized and target_normalized:
+                edges.add((source_normalized, target_normalized))
+        
+        return basic_blocks, edges
+    
+    def _extract_from_gcc_dot(self, content: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
+        """Extract from GCC DOT format"""
+        basic_blocks = set()
+        edges = set()
+        
+        # GCC format: unquoted node names with specific patterns like fn_72_basic_block_68
+        gcc_node_pattern = r'(\w+)\s*\[.*?label="([^"]*)'
+        for match in re.finditer(gcc_node_pattern, content):
+            node_id = match.group(1)
+            block_label = match.group(2) if match.group(2) else node_id
+            
+            # GCC uses patterns like fn_72_basic_block_68
+            if 'basic_block' in node_id:
+                # Extract function and basic block identifiers to maintain uniqueness
+                fn_bb_match = re.search(r'fn_(\d+)_basic_block_(\d+)', node_id)
+                if fn_bb_match:
+                    fn_num = fn_bb_match.group(1)
+                    bb_num = fn_bb_match.group(2)
+                    # Create unique identifier that preserves function context
+                    unique_bb_name = f"fn_{fn_num}_bb_{bb_num}"
+                    normalized = self.normalize_block_name(unique_bb_name)
+                    if normalized:
+                        basic_blocks.add(normalized)
+                else:
+                    # Fallback for other basic_block patterns
+                    bb_match = re.search(r'basic_block_(\d+)', node_id)
+                    if bb_match:
+                        bb_num = bb_match.group(1)
+                        normalized = self.normalize_block_name(f"bb_{bb_num}")
+                        if normalized:
+                            basic_blocks.add(normalized)
+        
+        # GCC format edges: unquoted names with port specifications (e.g., fn_72_basic_block_0:s -> fn_72_basic_block_2:n)
+        gcc_edge_pattern = r'(\w+)(?::\w+)?\s*->\s*(\w+)(?::\w+)?'
+        for match in re.finditer(gcc_edge_pattern, content):
+            source = match.group(1)
+            target = match.group(2)
+            
+            # Only process if they look like GCC basic block identifiers
+            if 'basic_block' in source and 'basic_block' in target:
+                # Extract function and basic block numbers to maintain uniqueness
+                source_fn_bb = re.search(r'fn_(\d+)_basic_block_(\d+)', source)
+                target_fn_bb = re.search(r'fn_(\d+)_basic_block_(\d+)', target)
+                
+                if source_fn_bb and target_fn_bb:
+                    source_fn, source_bb = source_fn_bb.groups()
+                    target_fn, target_bb = target_fn_bb.groups()
+                    # Create unique identifiers that preserve function context
+                    source_unique = f"fn_{source_fn}_bb_{source_bb}"
+                    target_unique = f"fn_{target_fn}_bb_{target_bb}"
+                    source_normalized = self.normalize_block_name(source_unique)
+                    target_normalized = self.normalize_block_name(target_unique)
+                    
+                    if source_normalized and target_normalized:
+                        edges.add((source_normalized, target_normalized))
+                else:
+                    # Fallback for other basic_block patterns
+                    source_bb = re.search(r'basic_block_(\d+)', source)
+                    target_bb = re.search(r'basic_block_(\d+)', target)
+                    
+                    if source_bb and target_bb:
+                        source_normalized = self.normalize_block_name(f"bb_{source_bb.group(1)}")
+                        target_normalized = self.normalize_block_name(f"bb_{target_bb.group(1)}")
+                        
+                        if source_normalized and target_normalized:
+                            edges.add((source_normalized, target_normalized))
+        
+        return basic_blocks, edges
+    
+    def _extract_from_r2_dot(self, content: str) -> Tuple[Set[str], Set[Tuple[str, str]]]:
+        """Extract from Radare2 DOT format with complex node attributes"""
+        basic_blocks = set()
+        edges = set()
+        
+        # Radare2 has complex node format with multiple attributes in any order:
+        # "0x0002f040" [URL="...", fillcolor="...", fontname="...", label="..."];
+        # We need a more flexible pattern that can handle attributes in any order
+        
+        # Extract node addresses - focus on addresses that have any attributes
+        r2_node_pattern = r'"(0x[0-9a-f]+)"\s*\[[^\]]+\]'
+        
+        for match in re.finditer(r2_node_pattern, content, re.IGNORECASE | re.DOTALL):
+            address = match.group(1)
+            normalized = self.normalize_block_name(address)
+            if normalized:
+                basic_blocks.add(normalized)
+        
+        # Extract edges - standard DOT format works fine for R2
+        edge_pattern = r'"([^"]+)"\s*->\s*"([^"]+)"'
+        
         for match in re.finditer(edge_pattern, content):
             source_addr = match.group(1)
             target_addr = match.group(2)
@@ -305,14 +394,17 @@ class CFGNormalizer:
             # GCC: Look for ENTRY node or first node in main cluster
             entry_match = re.search(r'(fn_\d+_basic_block_\d+)\s*\[.*?label="ENTRY"', content)
             if entry_match:
-                bb_match = re.search(r'basic_block_(\d+)', entry_match.group(1))
-                if bb_match:
-                    return f"bb_{bb_match.group(1)}"
+                # Extract function and basic block numbers
+                fn_bb_match = re.search(r'fn_(\d+)_basic_block_(\d+)', entry_match.group(1))
+                if fn_bb_match:
+                    fn_num, bb_num = fn_bb_match.groups()
+                    return f"fn_{fn_num}_bb_{bb_num}"
             
             # Fallback: look for first basic block in main cluster
-            main_cluster_match = re.search(r'subgraph\s+"?cluster_main"?.*?fn_\d+_basic_block_(\d+)', content, re.DOTALL)
+            main_cluster_match = re.search(r'subgraph\s+"?cluster_main"?.*?fn_(\d+)_basic_block_(\d+)', content, re.DOTALL)
             if main_cluster_match:
-                return f"bb_{main_cluster_match.group(1)}"
+                fn_num, bb_num = main_cluster_match.groups()
+                return f"fn_{fn_num}_bb_{bb_num}"
                 
         elif tool_name_lower == 'ghidra':
             # Ghidra: Look for main symbol or first address
